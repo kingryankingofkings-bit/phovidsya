@@ -5,6 +5,7 @@ authors = ["Ryan Stephens"]
 edition = "2024"
 rust-version = "1.89"
 description = "Fail-closed native storage mutation, durable journal, containment, and recovery contract"
+license-file = "../../LICENSE"
 publish = false
 [lib]
 path = "src/lib.rs"

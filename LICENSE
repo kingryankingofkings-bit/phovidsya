@@ -1,29 +1,95 @@
-MIT License
+RYAN STEPHENS PROPRIETARY SOFTWARE LICENSE
+Version 1.0 — Effective August 21, 2026
 
-Copyright (c) 2024 kingryankingofkings@gmail.com
+Copyright (c) 2024-2026 Ryan Stephens. All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. SOLE OWNERSHIP
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The original source code, object code, architecture, designs, documentation,
+interfaces, workflows, and other original materials contained in this
+repository (collectively, the "Software") are the sole and exclusive property
+of Ryan Stephens (the "Owner"), except for separately identified third-party
+components and dependencies.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. NO LICENSE GRANTED
 
----
+No copyright, patent, trademark, trade-secret, or other intellectual-property
+license is granted by possession of, access to, publication of, or disclosure
+of the Software. All rights not expressly granted in a separate written
+agreement signed by the Owner are reserved.
 
-Note on included packages:
-The Python reference engine in aegis_shield/core/ is derived from the Aegis-Block
-reference package, and the Rust crates in crates/ and kernel/ are from the
-Aegis_Shield_OS_Native_Build package — both original works by the same author and
-licensed under the same MIT terms.
+Any limited viewing, display, or repository-forking permission necessarily
+provided by the terms of an authorized hosting platform does not grant a right
+to use, execute, modify, reproduce, distribute, sublicense, sell, commercialize,
+or create derivative works from the Software outside that platform permission.
+
+3. WRITTEN AUTHORIZATION REQUIRED
+
+Any use of the Software requires the Owner's prior express written
+authorization. When the Owner provides a separate signed license or commercial
+agreement, that agreement controls only the rights expressly stated in it.
+
+4. PROHIBITED CONDUCT
+
+Without the Owner's prior express written authorization, you may not, directly
+or indirectly:
+
+  a. use, execute, copy, reproduce, modify, adapt, translate, or merge the
+     Software;
+  b. publish, distribute, transmit, sell, rent, lease, sublicense, assign,
+     transfer, host, or otherwise make the Software available to another party;
+  c. create or distribute derivative works based on the Software;
+  d. use the Software, its architecture, or its documentation to develop,
+     train, validate, or provide a competing or substantially similar product
+     or service;
+  e. remove, obscure, or alter any ownership, copyright, attribution, or
+     proprietary notice; or
+  f. represent that you own, authored, are licensed to commercialize, or are
+     authorized to grant rights in the Software.
+
+5. THIRD-PARTY COMPONENTS
+
+References to external packages, tools, services, specifications, or other
+third-party materials do not transfer ownership of those materials to the
+Owner. Any separately supplied third-party component remains governed by its
+applicable license and is excluded from the definition of the Owner's original
+Software.
+
+6. TERMINATION
+
+Any authorization granted by the Owner terminates automatically upon a breach
+of its applicable terms. Upon termination, the recipient must immediately stop
+all unauthorized use and destroy all copies in its possession or control,
+except where retention is required by law.
+
+7. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, SECURITY, OR
+RELIABILITY. THE OWNER DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE,
+UNINTERRUPTED, OR SUITABLE FOR PRODUCTION USE.
+
+8. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE OWNER WILL NOT BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, CONSEQUENTIAL, OR PUNITIVE
+DAMAGES, OR FOR ANY LOSS OF DATA, REVENUE, PROFITS, BUSINESS, OR GOODWILL,
+ARISING FROM OR RELATING TO ACCESS TO OR USE OF THE SOFTWARE, EVEN IF ADVISED
+OF THE POSSIBILITY OF SUCH DAMAGES.
+
+9. GOVERNING LAW
+
+This License is governed by the laws of the State of Texas, United States of
+America, without regard to conflict-of-law principles. Any dispute arising
+from this License must be brought in a court of competent jurisdiction located
+in Texas, unless a separate signed agreement with the Owner states otherwise.
+
+10. RESERVATION OF RIGHTS
+
+No waiver is effective unless made in writing by the Owner. A failure to
+enforce any provision is not a waiver. If any provision is held unenforceable,
+the remaining provisions remain in effect to the fullest extent permitted by
+law.
+
+For licensing inquiries or written authorization, contact Ryan Stephens.

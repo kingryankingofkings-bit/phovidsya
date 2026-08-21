@@ -145,6 +145,16 @@ What it genuinely provides:
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+**Proprietary — All Rights Reserved.**
+
+Copyright (c) 2024-2026 Ryan Stephens. Ryan Stephens is the sole owner of the
+original project code and documentation in this repository. No permission is
+granted to use, copy, modify, distribute, sublicense, sell, commercialize, or
+create derivative works without prior express written authorization from Ryan
+Stephens. Separately identified third-party dependencies remain subject to
+their respective licenses.
+
+See the [Ryan Stephens Proprietary Software License](LICENSE) for the complete
+terms.
 
 Original packages (`Aegis-Block`, `Aegis_Shield_OS_Native_Build`) are by the same author.

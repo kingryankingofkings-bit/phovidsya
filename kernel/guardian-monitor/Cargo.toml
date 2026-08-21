@@ -5,6 +5,7 @@ authors = ["Ryan Stephens"]
 edition = "2024"
 rust-version = "1.89"
 description = "Minimal pre-kernel authority and device mediation contract"
+license-file = "../../LICENSE"
 publish = false
 
 [lib]

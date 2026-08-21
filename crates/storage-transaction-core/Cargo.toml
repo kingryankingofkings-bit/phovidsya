@@ -3,7 +3,7 @@ name = "storage-transaction-core"
 version = "0.1.0-os.1"
 authors = ["Ryan Stephens"]
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license-file = "../../LICENSE"
 publish = false
 
 [lib]
