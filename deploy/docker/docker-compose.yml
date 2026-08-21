@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  aegis-shield:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: aegis-shield:latest
+    container_name: aegis-shield
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - aegis-namespace:/var/lib/aegis-shield
+      - aegis-keys:/etc/aegis-shield
+    environment:
+      AEGIS_API_KEY: "${AEGIS_API_KEY:-changeme-set-in-env}"
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8443/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  aegis-namespace:
+    driver: local
+  aegis-keys:
+    driver: local

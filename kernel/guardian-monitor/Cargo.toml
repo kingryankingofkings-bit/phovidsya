@@ -1,0 +1,19 @@
+[package]
+name = "guardian-monitor"
+version = "0.1.0-os.1"
+authors = ["Ryan Stephens"]
+edition = "2024"
+rust-version = "1.89"
+description = "Minimal pre-kernel authority and device mediation contract"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+authority-membrane-contract = { path = "../../crates/authority-membrane-contract" }
+dma-command-ir = { path = "../../crates/dma-command-ir" }
+storage-guardian-contract = { path = "../../crates/storage-guardian-contract" }

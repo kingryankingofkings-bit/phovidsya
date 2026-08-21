@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/authority-membrane-contract",
+    "crates/dma-command-ir",
+    "crates/storage-guardian-contract",
+    "crates/storage-transaction-core",
+    "kernel/guardian-monitor",
+]

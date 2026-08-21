@@ -1,0 +1,12 @@
+[package]
+name = "authority-membrane-contract"
+version = "0.1.0-os.1"
+authors = ["Ryan Stephens"]
+edition = "2024"
+rust-version = "1.89"
+description = "OS-native untrusted-data-to-authority membrane contract"
+publish = false
+[lib]
+path = "src/lib.rs"
+[features]
+default = []
