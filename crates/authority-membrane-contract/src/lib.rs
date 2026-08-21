@@ -335,10 +335,26 @@ pub fn encode_capability_grant_preimage(
     put(&mut out, &mut cursor, &[grant.requested as u8]);
     put(&mut out, &mut cursor, &grant.input_digest);
     put(&mut out, &mut cursor, &grant.policy_generation.to_be_bytes());
-    put(&mut out, &mut cursor, &grant.issued_at_monotonic_ns.to_be_bytes());
-    put(&mut out, &mut cursor, &grant.not_before_monotonic_ns.to_be_bytes());
-    put(&mut out, &mut cursor, &grant.expires_at_monotonic_ns.to_be_bytes());
-    put(&mut out, &mut cursor, &grant.request_deadline_monotonic_ns.to_be_bytes());
+    put(
+        &mut out,
+        &mut cursor,
+        &grant.issued_at_monotonic_ns.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &grant.not_before_monotonic_ns.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &grant.expires_at_monotonic_ns.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &grant.request_deadline_monotonic_ns.to_be_bytes(),
+    );
     debug_assert_eq!(cursor, CAPABILITY_GRANT_PREIMAGE_LEN);
     Ok(out)
 }
@@ -348,7 +364,8 @@ pub fn encode_supervisor_approval_preimage(
 ) -> Result<[u8; SUPERVISOR_APPROVAL_PREIMAGE_LEN], MembraneError> {
     validate_claim_schema(approval.schema_major, approval.schema_minor)?;
     if approval.approval_id == 0 || approval.supervisor_id == 0 || approval.request_id == 0
-        || approval.request_sequence == 0 || approval.subject_id == 0 || approval.resource_id == 0
+        || approval.request_sequence == 0 || approval.subject_id == 0
+        || approval.resource_id == 0
         || approval.capability_id == 0 || approval.capability_issuer_id == 0
         || approval.policy_generation == 0
     {
@@ -366,27 +383,62 @@ pub fn encode_supervisor_approval_preimage(
     put(&mut out, &mut cursor, &approval.schema_major.to_be_bytes());
     put(&mut out, &mut cursor, &approval.schema_minor.to_be_bytes());
     put(&mut out, &mut cursor, &approval.approval_id.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.supervisor_id.to_be_bytes());
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.supervisor_id.to_be_bytes(),
+    );
     put(&mut out, &mut cursor, &approval.request_id.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.request_sequence.to_be_bytes());
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.request_sequence.to_be_bytes(),
+    );
     put(&mut out, &mut cursor, &approval.subject_id.to_be_bytes());
     put(&mut out, &mut cursor, &approval.resource_id.to_be_bytes());
     put(&mut out, &mut cursor, &[approval.source as u8]);
     put(&mut out, &mut cursor, &[approval.requested as u8]);
     put(&mut out, &mut cursor, &approval.capability_id.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.capability_issuer_id.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.capability_authentication_evidence_digest);
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.capability_issuer_id.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.capability_authentication_evidence_digest,
+    );
     put(&mut out, &mut cursor, &approval.input_digest);
-    put(&mut out, &mut cursor, &approval.policy_generation.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.approved_at_monotonic_ns.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.expires_at_monotonic_ns.to_be_bytes());
-    put(&mut out, &mut cursor, &approval.request_deadline_monotonic_ns.to_be_bytes());
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.policy_generation.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.approved_at_monotonic_ns.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.expires_at_monotonic_ns.to_be_bytes(),
+    );
+    put(
+        &mut out,
+        &mut cursor,
+        &approval.request_deadline_monotonic_ns.to_be_bytes(),
+    );
     debug_assert_eq!(cursor, SUPERVISOR_APPROVAL_PREIMAGE_LEN);
     Ok(out)
 }
 
 pub const fn trusted_for_expiry(time: TimeClass) -> bool {
-    matches!(time, TimeClass::Monotonic | TimeClass::TokenExpiryTrusted { .. })
+    matches!(
+        time,
+        TimeClass::Monotonic | TimeClass::TokenExpiryTrusted { .. }
+    )
 }
 
 fn validate_request(
@@ -535,7 +587,10 @@ const fn requires_supervisor_approval(request: &MembraneRequest) -> bool {
     elevated && !matches!(request.source, DataTrust::TrustedSystem)
 }
 
-fn validate_claim_schema(schema_major: u16, schema_minor: u16) -> Result<(), MembraneError> {
+fn validate_claim_schema(
+    schema_major: u16,
+    schema_minor: u16,
+) -> Result<(), MembraneError> {
     if schema_major != SCHEMA_MAJOR || schema_minor != SCHEMA_MINOR {
         return Err(MembraneError::UnsupportedSchema);
     }
@@ -567,7 +622,8 @@ mod tests {
             canonical_preimage: &[u8],
             authentication_evidence_digest: &Digest,
         ) -> bool {
-            *authentication_evidence_digest == test_evidence(0x43, issuer_id, canonical_preimage)
+            *authentication_evidence_digest
+                == test_evidence(0x43, issuer_id, canonical_preimage)
         }
         fn verify_supervisor_approval(
             &self,
@@ -575,7 +631,8 @@ mod tests {
             canonical_preimage: &[u8],
             authentication_evidence_digest: &Digest,
         ) -> bool {
-            *authentication_evidence_digest == test_evidence(0x41, supervisor_id, canonical_preimage)
+            *authentication_evidence_digest
+                == test_evidence(0x41, supervisor_id, canonical_preimage)
         }
     }
 
@@ -648,7 +705,8 @@ mod tests {
     fn signed_capability(request: &MembraneRequest) -> CapabilityGrant {
         let mut grant = unsigned_capability(request);
         let preimage = encode_capability_grant_preimage(&grant).unwrap();
-        grant.authentication_evidence_digest = test_evidence(0x43, grant.issuer_id, &preimage);
+        grant.authentication_evidence_digest =
+            test_evidence(0x43, grant.issuer_id, &preimage);
         grant
     }
 
@@ -669,7 +727,8 @@ mod tests {
             requested: request.requested,
             capability_id: request.capability_id,
             capability_issuer_id: capability.issuer_id,
-            capability_authentication_evidence_digest: capability.authentication_evidence_digest,
+            capability_authentication_evidence_digest: capability
+                .authentication_evidence_digest,
             input_digest: request.input_digest,
             policy_generation: request.policy_generation,
             approved_at_monotonic_ns: 8,
@@ -690,7 +749,12 @@ mod tests {
         approval
     }
 
-    fn admitted() -> (MembraneRequest, CapabilityGrant, SupervisorApprovalReceipt, MembraneContext) {
+    fn admitted() -> (
+        MembraneRequest,
+        CapabilityGrant,
+        SupervisorApprovalReceipt,
+        MembraneContext,
+    ) {
         let request = request();
         let capability = signed_capability(&request);
         let approval = signed_approval(&request, &capability);
@@ -700,9 +764,14 @@ mod tests {
     #[test]
     fn exact_authenticated_bindings_pass_and_are_preserved() {
         let (request, capability, approval, mut context) = admitted();
-        let validated =
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier)
-                .unwrap();
+        let validated = admit(
+            &request,
+            Some(&capability),
+            Some(&approval),
+            &mut context,
+            &TestVerifier,
+        )
+        .unwrap();
         assert_eq!(validated.request_id(), request.request_id);
         assert_eq!(validated.resource_id(), request.resource_id);
         assert_eq!(validated.requested(), request.requested);
@@ -714,12 +783,27 @@ mod tests {
     fn successful_admission_consumes_the_request_sequence() {
         let (request, capability, approval, mut context) = admitted();
         assert!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier)
-                .is_ok()
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            )
+            .is_ok()
         );
-        assert_eq!(context.last_accepted_request_sequence, request.request_sequence);
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            context.last_accepted_request_sequence,
+            request.request_sequence
+        );
+        assert_eq!(
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::ReplayOrOutOfOrder)
         );
     }
@@ -735,7 +819,13 @@ mod tests {
         );
         let capability = signed_capability(&request);
         assert_eq!(
-            admit(&request, Some(&capability), None, &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                None,
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalRequired)
         );
     }
@@ -745,7 +835,13 @@ mod tests {
         let (mut request, capability, approval, mut context) = admitted();
         request.schema_major = 1;
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::UnsupportedSchema)
         );
     }
@@ -757,7 +853,13 @@ mod tests {
         let capability = signed_capability(&request);
         let approval = signed_approval(&request, &capability);
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::ReplayOrOutOfOrder)
         );
     }
@@ -768,25 +870,49 @@ mod tests {
         let mut changed = request;
         changed.resource_id += 1;
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityMismatch)
         );
         changed = request;
         changed.subject_id += 1;
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityMismatch)
         );
         changed = request;
         changed.requested = AuthorityClass::Device;
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityMismatch)
         );
         changed = request;
         changed.input_digest = [0x77; 32];
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityMismatch)
         );
     }
@@ -796,7 +922,13 @@ mod tests {
         let (request, mut capability, approval, mut context) = admitted();
         capability.issued_at_monotonic_ns -= 1;
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityAuthenticationFailed)
         );
     }
@@ -811,7 +943,13 @@ mod tests {
             &encode_capability_grant_preimage(&capability).unwrap(),
         );
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CapabilityMismatch)
         );
     }
@@ -824,14 +962,26 @@ mod tests {
         changed.request_sequence += 1;
         let capability = signed_capability(&changed);
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&old_approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&old_approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalMismatch)
         );
         changed = request;
         changed.resource_id += 1;
         let capability = signed_capability(&changed);
         assert_eq!(
-            admit(&changed, Some(&capability), Some(&old_approval), &mut context, &TestVerifier),
+            admit(
+                &changed,
+                Some(&capability),
+                Some(&old_approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalMismatch)
         );
     }
@@ -859,7 +1009,13 @@ mod tests {
             &encode_supervisor_approval_preimage(&future).unwrap(),
         );
         assert_eq!(
-            admit(&request, Some(&capability), Some(&future), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&future),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalFromFuture)
         );
         let mut expired = unsigned_approval(&request, &capability);
@@ -870,13 +1026,25 @@ mod tests {
             &encode_supervisor_approval_preimage(&expired).unwrap(),
         );
         assert_eq!(
-            admit(&request, Some(&capability), Some(&expired), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&expired),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalExpired)
         );
         let mut forged = approval;
         forged.authentication_evidence_digest[0] ^= 1;
         assert_eq!(
-            admit(&request, Some(&capability), Some(&forged), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&forged),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::SupervisorApprovalAuthenticationFailed)
         );
     }
@@ -887,7 +1055,16 @@ mod tests {
         request.source = DataTrust::TrustedSystem;
         request.requested = AuthorityClass::ReadData;
         let capability = signed_capability(&request);
-        assert!(admit(&request, Some(&capability), None, &mut context(), &TestVerifier).is_ok());
+        assert!(
+            admit(
+                &request,
+                Some(&capability),
+                None,
+                &mut context(),
+                &TestVerifier
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -895,13 +1072,25 @@ mod tests {
         let (request, capability, approval, mut context) = admitted();
         context.direct_privileged_path_absent = false;
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::AmbientBypass)
         );
         context = self::context();
         context.credentials_shared_with_server = true;
         assert_eq!(
-            admit(&request, Some(&capability), Some(&approval), &mut context, &TestVerifier),
+            admit(
+                &request,
+                Some(&capability),
+                Some(&approval),
+                &mut context,
+                &TestVerifier
+            ),
             Err(MembraneError::CredentialExposure)
         );
         assert!(!trusted_for_expiry(TimeClass::WallUntrusted));
