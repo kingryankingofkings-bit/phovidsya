@@ -1,12 +1,19 @@
-"""Aegis Shield daemon service."""
+"""Aegis Shield daemon service.
+
+Provisions a journal if needed, starts the engine, serves the FastAPI server,
+exposes a Unix socket for CLI status queries and local recovery authorization,
+and optionally runs an NBD server so the namespace appears as a block device.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import signal
 import socket
+import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -28,7 +35,7 @@ def _provision_if_needed(namespace_dir: Path, blocks: int, block_size: int = 409
 
 
 class AegisDaemon:
-    """Main daemon: journal + engine + API server + Unix socket."""
+    """Main daemon: journal + engine + API server + Unix socket (+ optional NBD)."""
 
     def __init__(
         self,
@@ -41,6 +48,10 @@ class AegisDaemon:
         public_key_path: Optional[Path] = None,
         unix_socket_path: Optional[Path] = None,
         policy_config: Optional[PolicyConfig] = None,
+        # NBD — disabled by default; set nbd_host to enable.
+        nbd_host: Optional[str] = None,
+        nbd_port: int = 10809,
+        nbd_export: str = "aegis",
     ):
         self.namespace_dir = namespace_dir
         self.audit_path = audit_path
@@ -50,6 +61,9 @@ class AegisDaemon:
         self.public_key_path = public_key_path
         self.unix_socket_path = unix_socket_path or Path("/run/aegis-shield/aegis.sock")
         self.policy_config = policy_config or PolicyConfig()
+        self.nbd_host = nbd_host
+        self.nbd_port = nbd_port
+        self.nbd_export = nbd_export
         self._shutdown_event = threading.Event()
 
     def _setup_signals(self) -> None:
@@ -60,7 +74,20 @@ class AegisDaemon:
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)
 
+    # ── Unix socket ──────────────────────────────────────────────────────────────────
+
     def _serve_unix_socket(self, engine: AegisEngine) -> None:
+        """Serve status queries and local-only recovery authorization.
+
+        Commands
+        --------
+        status
+            Return engine status as JSON.
+        authorize <token>
+            Attempt recovery authorization with physical_presence=True.
+            Physical presence is considered asserted because the caller has
+            local shell access (Unix socket is not network-reachable).
+        """
         sock_path = self.unix_socket_path
         sock_path.parent.mkdir(parents=True, exist_ok=True)
         if sock_path.exists():
@@ -78,14 +105,57 @@ class AegisDaemon:
                     continue
                 with conn:
                     try:
-                        data = conn.recv(256).decode("utf-8").strip()
-                        if data == "status":
-                            response = json.dumps(engine.status())
-                        else:
-                            response = json.dumps({"error": f"unknown command: {data}"})
+                        data = conn.recv(4096).decode("utf-8").strip()
+                        response = self._handle_socket_command(data, engine)
                         conn.sendall((response + "\n").encode("utf-8"))
                     except Exception as exc:
                         log.warning("Unix socket error: %s", exc)
+
+    def _handle_socket_command(self, command: str, engine: AegisEngine) -> str:
+        if command == "status":
+            return json.dumps(engine.status())
+
+        if command.startswith("authorize "):
+            token = command[len("authorize "):].strip()
+            return self._socket_authorize(token, engine)
+
+        return json.dumps({"error": f"unknown command: {command!r}"})
+
+    def _socket_authorize(self, token: str, engine: AegisEngine) -> str:
+        """Authorize recovery via the Unix socket — physical presence is asserted."""
+        if not self.public_key_path or not self.public_key_path.exists():
+            return json.dumps({"error": "no public key configured on this daemon"})
+        try:
+            from ..core.tokens import TokenVerifier
+
+            verifier = TokenVerifier(self.public_key_path.read_bytes())
+            engine.authorize_recovery(
+                token,
+                verifier,
+                physical_presence=True,  # local socket = physical access
+            )
+            return json.dumps({"authorized": True, "state": engine.state.value})
+        except (RuntimeError, PermissionError, ValueError) as exc:
+            return json.dumps({"authorized": False, "error": str(exc)})
+
+    # ── NBD server ───────────────────────────────────────────────────────────────────
+
+    def _serve_nbd(self, engine: AegisEngine) -> None:
+        """Run the NBD write-gate in a daemon thread (single-connection loop)."""
+        from ..core.nbd import serve_tcp
+
+        log.info(
+            "NBD server starting on %s:%d export=%r",
+            self.nbd_host,
+            self.nbd_port,
+            self.nbd_export,
+        )
+        try:
+            serve_tcp(engine, self.nbd_host, self.nbd_port, self.nbd_export)
+        except Exception as exc:
+            log.error("NBD server terminated unexpectedly: %s", exc)
+
+    # ── Main run loop ──────────────────────────────────────────────────────────────────
 
     def run(self) -> None:
         self._setup_signals()
@@ -96,6 +166,7 @@ class AegisDaemon:
 
         app = create_app(engine=engine, public_key_path=self.public_key_path)
 
+        # Unix socket thread
         sock_thread = threading.Thread(
             target=self._serve_unix_socket,
             args=(engine,),
@@ -104,9 +175,27 @@ class AegisDaemon:
         )
         sock_thread.start()
 
-        config = uvicorn.Config(app, host=self.host, port=self.port, log_level="info", access_log=True)
+        # NBD thread (optional)
+        if self.nbd_host is not None:
+            nbd_thread = threading.Thread(
+                target=self._serve_nbd,
+                args=(engine,),
+                daemon=True,
+                name="aegis-nbd",
+            )
+            nbd_thread.start()
+
+        # Uvicorn config
+        config = uvicorn.Config(
+            app,
+            host=self.host,
+            port=self.port,
+            log_level="info",
+            access_log=True,
+        )
         server = uvicorn.Server(config)
 
+        # Run uvicorn in a thread so we can intercept signals ourselves
         uvicorn_thread = threading.Thread(target=server.run, name="aegis-uvicorn", daemon=True)
         uvicorn_thread.start()
         log.info("API server started on %s:%d", self.host, self.port)

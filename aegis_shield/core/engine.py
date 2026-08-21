@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 
@@ -9,6 +11,25 @@ from .journal import DurableJournal
 from .policy import Policy
 from .tokens import TokenVerifier
 from .types import AegisState, Decision, IoEvent, IoKind
+
+_STATE_FILENAME = "engine_state.json"
+
+
+def _atomic_write_json(path: Path, value: dict) -> None:
+    """Write *value* to *path* atomically (write-temp, fsync, rename)."""
+    tmp = path.with_suffix(".json.new")
+    payload = json.dumps(value, sort_keys=True, indent=2).encode("utf-8") + b"\n"
+    with tmp.open("wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    # fsync the directory so the rename is durable
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 class AegisEngine:
@@ -21,12 +42,64 @@ class AegisEngine:
         self.analyzer = WindowAnalyzer(
             AnalyzerConfig(namespace_blocks=journal.blocks)
         )
-        self.state = AegisState.BOOT_SELFTEST
-        self.state_version = 0
-        self.containment_sequence: int | None = None
-        self.recovery_sequence: int | None = None
-        self._used_nonces: set[str] = set()
-        self._transition(AegisState.NORMAL, "self-test complete")
+        self._state_path = journal.root / _STATE_FILENAME
+
+        # Restore durable state if a previous run left one, otherwise boot fresh.
+        persisted = self._load_state()
+        if persisted is not None:
+            self.state = AegisState(persisted["state"])
+            self.state_version = int(persisted["state_version"])
+            self.containment_sequence: int | None = persisted.get("containment_sequence")
+            self.recovery_sequence: int | None = persisted.get("recovery_sequence")
+            self._used_nonces: set[str] = set(persisted.get("used_nonces", []))
+            self.audit.append(
+                "engine_restored",
+                {
+                    "state": self.state.value,
+                    "state_version": self.state_version,
+                    "containment_sequence": self.containment_sequence,
+                },
+            )
+        else:
+            self.state = AegisState.BOOT_SELFTEST
+            self.state_version = 0
+            self.containment_sequence = None
+            self.recovery_sequence = None
+            self._used_nonces = set()
+            self._transition(AegisState.NORMAL, "self-test complete")
+
+    # ── Persistence ────────────────────────────────────────────────────────────────────
+
+    def _load_state(self) -> dict | None:
+        """Return the persisted state dict, or *None* if no valid state file exists."""
+        if not self._state_path.exists():
+            return None
+        try:
+            value = json.loads(self._state_path.read_bytes())
+            # Validate that the recorded state name is a known AegisState
+            AegisState(value["state"])
+            return value
+        except Exception:
+            # Corrupt or unrecognisable state file — treat as a fresh start and
+            # log a warning via audit once audit is ready (called after init).
+            return None
+
+    def _save_state(self) -> None:
+        """Atomically persist the current engine state so it survives a restart."""
+        _atomic_write_json(
+            self._state_path,
+            {
+                "state": self.state.value,
+                "state_version": self.state_version,
+                "containment_sequence": self.containment_sequence,
+                "recovery_sequence": self.recovery_sequence,
+                # Nonces are short hex strings; serialising them all is safe
+                # because recovery events are rare and TTL-bounded.
+                "used_nonces": sorted(self._used_nonces),
+            },
+        )
+
+    # ── State machine ────────────────────────────────────────────────────────────────────
 
     def _transition(self, target: AegisState, reason: str) -> None:
         allowed = {
@@ -48,6 +121,9 @@ class AegisEngine:
             "state_transition",
             {"from": previous.value, "to": target.value, "reason": reason, "version": self.state_version},
         )
+        self._save_state()
+
+    # ── I/O operations ──────────────────────────────────────────────────────────────────
 
     def read(self, lba: int, blocks: int = 1) -> bytes:
         sequence = self.recovery_sequence if self.state is AegisState.RECOVERY_READ_ONLY else None
@@ -63,6 +139,7 @@ class AegisEngine:
         blocks = len(payload) // self.journal.block_size
         before = self.journal.read(lba, blocks)
         event = IoEvent(IoKind.WRITE, lba, blocks, payload, time.time_ns())
+        # Persist first; an acknowledged write is always replayable in this reference model.
         final_sequence = self.journal.append(lba, payload)
         features = self.analyzer.observe(event, before=before)
         decision = self.policy.evaluate(features)
@@ -117,6 +194,9 @@ class AegisEngine:
             raise ValueError("invalid recovery sequence")
         self._used_nonces.add(authorization.nonce)
         self.recovery_sequence = target
+        # Persist nonces before the state transition so a crash between the two
+        # cannot allow replay.
+        self._save_state()
         self._transition(AegisState.RECOVERY_READ_ONLY, "signed authorization plus physical presence")
 
     def status(self) -> dict:

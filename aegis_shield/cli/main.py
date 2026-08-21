@@ -16,6 +16,10 @@ def cli() -> None:
     """Aegis Shield — hardware-grade ransomware isolation, software reference deployment."""
 
 
+# ---------------------------------------------------------------------------
+# provision
+# ---------------------------------------------------------------------------
+
 @cli.command()
 @click.argument("namespace_dir", type=click.Path(path_type=Path))
 @click.option("--blocks", required=True, type=int, help="Namespace size in blocks")
@@ -35,13 +39,45 @@ def provision(namespace_dir: Path, blocks: int, block_size: int, device_id: Opti
     click.echo(f"  block_size : {journal.block_size}")
 
 
+# ---------------------------------------------------------------------------
+# start
+# ---------------------------------------------------------------------------
+
 @cli.command()
-@click.argument("namespace_dir", type=click.Path(exists=True, path_type=Path))
-@click.option("--host", default="0.0.0.0", show_default=True)
-@click.option("--port", default=8443, show_default=True, type=int)
-@click.option("--public-key", default=None, type=click.Path(path_type=Path))
-@click.option("--policy-config", default=None, type=click.Path(path_type=Path))
-@click.option("--blocks", default=1024, show_default=True, type=int)
+@click.argument("namespace_dir", type=click.Path(path_type=Path))
+@click.option("--host", default="0.0.0.0", show_default=True, envvar="AEGIS_HOST")
+@click.option("--port", default=8443, show_default=True, type=int, envvar="AEGIS_PORT")
+@click.option("--public-key", default=None, type=click.Path(path_type=Path), help="Ed25519 public key PEM for token verification")
+@click.option("--policy-config", default=None, type=click.Path(path_type=Path), help="Policy YAML config")
+@click.option(
+    "--blocks",
+    default=65536,
+    show_default=True,
+    type=int,
+    envvar="AEGIS_NAMESPACE_BLOCKS",
+    help="Blocks to provision when the namespace does not yet exist",
+)
+@click.option(
+    "--nbd-host",
+    default=None,
+    envvar="AEGIS_NBD_HOST",
+    help="Host to bind the NBD write-gate (omit to disable NBD)",
+)
+@click.option(
+    "--nbd-port",
+    default=10809,
+    show_default=True,
+    type=int,
+    envvar="AEGIS_NBD_PORT",
+    help="Port for the NBD server (default 10809)",
+)
+@click.option(
+    "--nbd-export",
+    default="aegis",
+    show_default=True,
+    envvar="AEGIS_NBD_EXPORT",
+    help="NBD export name",
+)
 def start(
     namespace_dir: Path,
     host: str,
@@ -49,8 +85,16 @@ def start(
     public_key: Optional[Path],
     policy_config: Optional[Path],
     blocks: int,
+    nbd_host: Optional[str],
+    nbd_port: int,
+    nbd_export: str,
 ) -> None:
-    """Start the Aegis Shield daemon and REST API server."""
+    """Start the Aegis Shield daemon and REST API server.
+
+    NAMESPACE_DIR is auto-provisioned with --blocks blocks if it does not exist.
+    Set AEGIS_NAMESPACE_BLOCKS in the environment to override the default block
+    count without changing the command line (useful in Docker deployments).
+    """
     from ..daemon.service import AegisDaemon
     from ..core.config import load_policy
     from ..core.policy import PolicyConfig
@@ -66,10 +110,19 @@ def start(
         blocks=blocks,
         public_key_path=public_key,
         policy_config=policy_cfg,
+        nbd_host=nbd_host,
+        nbd_port=nbd_port,
+        nbd_export=nbd_export,
     )
     click.echo(f"Starting Aegis Shield on {host}:{port} — namespace {namespace_dir}")
+    if nbd_host is not None:
+        click.echo(f"NBD write-gate: {nbd_host}:{nbd_port} export={nbd_export!r}")
     daemon.run()
 
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.argument("namespace_dir", type=click.Path(exists=True, path_type=Path))
@@ -85,6 +138,10 @@ def status(namespace_dir: Path) -> None:
     click.echo(json.dumps(info, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# keygen
+# ---------------------------------------------------------------------------
+
 @cli.command()
 @click.argument("private", type=click.Path(path_type=Path))
 @click.argument("public", type=click.Path(path_type=Path))
@@ -98,12 +155,16 @@ def keygen(private: Path, public: Path) -> None:
     click.echo("Keep the private key offline and off the protected host.")
 
 
+# ---------------------------------------------------------------------------
+# issue-token
+# ---------------------------------------------------------------------------
+
 @cli.command("issue-token")
 @click.argument("namespace_dir", type=click.Path(exists=True, path_type=Path))
 @click.argument("private_key", type=click.Path(exists=True, path_type=Path))
 @click.option("--state-version", required=True, type=int)
 @click.option("--target-sequence", default=None, type=int)
-@click.option("--ttl-seconds", default=600, show_default=True, type=int)
+@click.option("--ttl-seconds", default=600, show_default=True, type=int, help="Token TTL (max 900)")
 def issue_token(
     namespace_dir: Path,
     private_key: Path,
@@ -137,6 +198,10 @@ def issue_token(
     click.echo(token)
 
 
+# ---------------------------------------------------------------------------
+# generate-trace
+# ---------------------------------------------------------------------------
+
 @cli.command("generate-trace")
 @click.argument("output", type=click.Path(path_type=Path))
 @click.option("--pattern", required=True,
@@ -149,10 +214,20 @@ def generate_trace(output: Path, pattern: str, blocks: int, block_size: int, ope
     """Generate a deterministic synthetic (non-malware) I/O trace."""
     from ..core.tracegen import synthetic_trace, write_trace
 
-    trace = synthetic_trace(pattern=pattern, blocks=blocks, block_size=block_size, operations=operations, seed=seed)
-    write_trace(output, trace)
+    trace = synthetic_trace(
+        pattern=pattern,
+        blocks=blocks,
+        block_size=block_size,
+        operations=operations,
+        seed=seed,
+    )
+    write_trace(output, trace)  # write_trace(path, events)
     click.echo(f"Wrote {len(trace)} operations to {output}")
 
+
+# ---------------------------------------------------------------------------
+# replay
+# ---------------------------------------------------------------------------
 
 @cli.command()
 @click.argument("namespace_dir", type=click.Path(exists=True, path_type=Path))
@@ -161,7 +236,6 @@ def generate_trace(output: Path, pattern: str, blocks: int, block_size: int, ope
 def replay(namespace_dir: Path, trace_file: Path, policy_config: Optional[Path]) -> None:
     """Replay a synthetic I/O trace into a provisioned namespace."""
     import json as _json
-    import base64 as _b64
     from ..core.journal import DurableJournal
     from ..core.engine import AegisEngine
     from ..core.policy import Policy, PolicyConfig
@@ -171,6 +245,9 @@ def replay(namespace_dir: Path, trace_file: Path, policy_config: Optional[Path])
     policy_cfg = load_policy(policy_config) if policy_config else PolicyConfig()
     engine = AegisEngine(journal, Policy(policy_cfg), namespace_dir / "audit.jsonl")
 
+    import base64 as _b64
+
+    # Trace files are JSONL (one JSON object per line); payload is base64-encoded.
     trace = []
     with trace_file.open() as fh:
         for line in fh:
