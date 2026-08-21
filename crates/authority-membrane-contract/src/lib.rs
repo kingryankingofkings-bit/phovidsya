@@ -310,8 +310,12 @@ pub fn encode_capability_grant_preimage(
     grant: &CapabilityGrant,
 ) -> Result<[u8; CAPABILITY_GRANT_PREIMAGE_LEN], MembraneError> {
     validate_claim_schema(grant.schema_major, grant.schema_minor)?;
-    if grant.issuer_id == 0 || grant.capability_id == 0 || grant.request_id == 0
-        || grant.request_sequence == 0 || grant.subject_id == 0 || grant.resource_id == 0
+    if grant.issuer_id == 0
+        || grant.capability_id == 0
+        || grant.request_id == 0
+        || grant.request_sequence == 0
+        || grant.subject_id == 0
+        || grant.resource_id == 0
         || grant.policy_generation == 0
     {
         return Err(MembraneError::MissingIdentity);
@@ -334,7 +338,11 @@ pub fn encode_capability_grant_preimage(
     put(&mut out, &mut cursor, &[grant.source as u8]);
     put(&mut out, &mut cursor, &[grant.requested as u8]);
     put(&mut out, &mut cursor, &grant.input_digest);
-    put(&mut out, &mut cursor, &grant.policy_generation.to_be_bytes());
+    put(
+        &mut out,
+        &mut cursor,
+        &grant.policy_generation.to_be_bytes(),
+    );
     put(
         &mut out,
         &mut cursor,
@@ -363,10 +371,14 @@ pub fn encode_supervisor_approval_preimage(
     approval: &SupervisorApprovalReceipt,
 ) -> Result<[u8; SUPERVISOR_APPROVAL_PREIMAGE_LEN], MembraneError> {
     validate_claim_schema(approval.schema_major, approval.schema_minor)?;
-    if approval.approval_id == 0 || approval.supervisor_id == 0 || approval.request_id == 0
-        || approval.request_sequence == 0 || approval.subject_id == 0
+    if approval.approval_id == 0
+        || approval.supervisor_id == 0
+        || approval.request_id == 0
+        || approval.request_sequence == 0
+        || approval.subject_id == 0
         || approval.resource_id == 0
-        || approval.capability_id == 0 || approval.capability_issuer_id == 0
+        || approval.capability_id == 0
+        || approval.capability_issuer_id == 0
         || approval.policy_generation == 0
     {
         return Err(MembraneError::MissingIdentity);
@@ -383,11 +395,7 @@ pub fn encode_supervisor_approval_preimage(
     put(&mut out, &mut cursor, &approval.schema_major.to_be_bytes());
     put(&mut out, &mut cursor, &approval.schema_minor.to_be_bytes());
     put(&mut out, &mut cursor, &approval.approval_id.to_be_bytes());
-    put(
-        &mut out,
-        &mut cursor,
-        &approval.supervisor_id.to_be_bytes(),
-    );
+    put(&mut out, &mut cursor, &approval.supervisor_id.to_be_bytes());
     put(&mut out, &mut cursor, &approval.request_id.to_be_bytes());
     put(
         &mut out,
@@ -587,10 +595,7 @@ const fn requires_supervisor_approval(request: &MembraneRequest) -> bool {
     elevated && !matches!(request.source, DataTrust::TrustedSystem)
 }
 
-fn validate_claim_schema(
-    schema_major: u16,
-    schema_minor: u16,
-) -> Result<(), MembraneError> {
+fn validate_claim_schema(schema_major: u16, schema_minor: u16) -> Result<(), MembraneError> {
     if schema_major != SCHEMA_MAJOR || schema_minor != SCHEMA_MINOR {
         return Err(MembraneError::UnsupportedSchema);
     }
@@ -622,8 +627,7 @@ mod tests {
             canonical_preimage: &[u8],
             authentication_evidence_digest: &Digest,
         ) -> bool {
-            *authentication_evidence_digest
-                == test_evidence(0x43, issuer_id, canonical_preimage)
+            *authentication_evidence_digest == test_evidence(0x43, issuer_id, canonical_preimage)
         }
         fn verify_supervisor_approval(
             &self,
@@ -705,8 +709,7 @@ mod tests {
     fn signed_capability(request: &MembraneRequest) -> CapabilityGrant {
         let mut grant = unsigned_capability(request);
         let preimage = encode_capability_grant_preimage(&grant).unwrap();
-        grant.authentication_evidence_digest =
-            test_evidence(0x43, grant.issuer_id, &preimage);
+        grant.authentication_evidence_digest = test_evidence(0x43, grant.issuer_id, &preimage);
         grant
     }
 
@@ -727,8 +730,7 @@ mod tests {
             requested: request.requested,
             capability_id: request.capability_id,
             capability_issuer_id: capability.issuer_id,
-            capability_authentication_evidence_digest: capability
-                .authentication_evidence_digest,
+            capability_authentication_evidence_digest: capability.authentication_evidence_digest,
             input_digest: request.input_digest,
             policy_generation: request.policy_generation,
             approved_at_monotonic_ns: 8,
