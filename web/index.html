@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Aegis Shield — Ransomware Isolation Monitor</title>
+  <link rel="stylesheet" href="/ui/static/style.css"/>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-inner">
+    <div class="logo">
+      <svg class="shield-icon" width="32" height="32" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="--shield-color:#4f8ef7">
+        <path d="M14 2L4 6v8c0 5.5 4.3 10.7 10 12 5.7-1.3 10-6.5 10-12V6L14 2Z"
+              fill="var(--shield-color,#4f8ef7)" opacity="0.25" stroke="var(--shield-color,#4f8ef7)" stroke-width="1.5"/>
+        <path d="M10 14l2.5 2.5L18 11" stroke="#fff" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="logo-text">Aegis Shield</span>
+    </div>
+    <div class="header-actions">
+      <input id="apiKeyInput" type="password" placeholder="X-API-Key"/>
+      <button class="btn btn-primary" id="connectBtn">Connect</button>
+      <button class="btn btn-sm" id="pauseBtn">Pause</button>
+      <label class="theme-toggle">
+        <input type="checkbox" id="themeToggle"/>
+        <span class="toggle-label">Light</span>
+      </label>
+    </div>
+  </div>
+</header>
+
+<div id="alertBanner" class="alert-banner hidden"></div>
+
+<div class="main">
+  <div id="lastUpdated" style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;"></div>
+
+  <div class="grid-top">
+    <!-- Status card -->
+    <div class="card">
+      <div class="card-title">Device Status</div>
+      <div class="status-grid">
+        <div class="stat" style="grid-column:1/-1">
+          <span class="stat-label">Device ID</span>
+          <span class="stat-value mono" id="deviceId">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">State</span>
+          <span class="stat-value" id="stateValue">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Writes Allowed</span>
+          <span class="stat-value" id="writesAllowed">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">State Version</span>
+          <span class="stat-value mono" id="stateVersion">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Last Sequence</span>
+          <span class="stat-value mono" id="lastSequence">—</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Journal Blocks</span>
+          <span class="stat-value mono" id="journalBlocks">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Containment visual -->
+    <div class="card">
+      <div class="card-title">Protection Status</div>
+      <div class="containment-visual">
+        <svg id="shieldIcon" class="shield-icon" width="64" height="64" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="--shield-color:#4f8ef7">
+          <path d="M14 2L4 6v8c0 5.5 4.3 10.7 10 12 5.7-1.3 10-6.5 10-12V6L14 2Z"
+                fill="var(--shield-color,#4f8ef7)" opacity="0.25" stroke="var(--shield-color,#4f8ef7)" stroke-width="1.5"/>
+          <path d="M10 14l2.5 2.5L18 11" stroke="#fff" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div class="containment-label" id="containmentLabel">—</div>
+        <div class="containment-seq" id="containmentSeq"></div>
+      </div>
+    </div>
+
+    <!-- Sizing card -->
+    <div class="card">
+      <div class="card-title">Storage Sizing</div>
+      <div class="sizing-grid">
+        <span class="sizing-label">PCIe ceiling</span>
+        <span class="sizing-val" id="pcieCeiling">—</span>
+        <span class="sizing-label">Payload IOPS</span>
+        <span class="sizing-val" id="payloadIops">—</span>
+        <span class="sizing-label">Journal horizon</span>
+        <span class="sizing-val" id="journalSec">—</span>
+        <span class="sizing-label">Max pending</span>
+        <span class="sizing-val" id="maxPending">—</span>
+        <span class="sizing-label">Write amp.</span>
+        <span class="sizing-val" id="writeAmp">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Events table -->
+  <div class="card" id="eventsCard">
+    <div class="events-header">
+      <div class="card-title">Audit Events</div>
+      <div class="events-controls">
+        <span class="event-count" id="eventCount">0 events</span>
+        <button class="btn btn-sm" id="clearBtn">Clear</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="events-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Type</th>
+            <th>Time</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="eventsBody">
+          <tr class="placeholder-row">
+            <td colspan="4">Connect with your API key to stream audit events.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<footer class="footer">
+  <span>Aegis Shield v0.1.0 — ransomware isolation reference daemon</span>
+  <span>Storage semantics · fail-closed · no trained model</span>
+</footer>
+
+<script src="/ui/static/dashboard.js"></script>
+</body>
+</html>
