@@ -5,6 +5,7 @@ authors = ["Ryan Stephens"]
 edition = "2024"
 rust-version = "1.89"
 description = "Allocation-free typed DMA command intermediate representation and validator"
+license-file = "../../LICENSE"
 publish = false
 [lib]
 path = "src/lib.rs"
