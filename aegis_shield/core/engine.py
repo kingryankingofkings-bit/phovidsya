@@ -199,6 +199,74 @@ class AegisEngine:
         self._save_state()
         self._transition(AegisState.RECOVERY_READ_ONLY, "signed authorization plus physical presence")
 
+    # States that can transition directly to MAINTENANCE.
+    _MAINTENANCE_ENTRY_STATES = frozenset(
+        {AegisState.NORMAL, AegisState.CONTAINED, AegisState.RECOVERY_READ_ONLY, AegisState.FAULT}
+    )
+
+    def enter_maintenance(
+        self,
+        token: str,
+        verifier: TokenVerifier,
+        *,
+        physical_presence: bool,
+        now: int | None = None,
+    ) -> None:
+        """Transition to MAINTENANCE, re-enabling writes for authorised servicing.
+
+        Requires a signed token with ``action="enter_maintenance"`` and local
+        physical presence (asserted via the Unix socket, never over HTTP).
+        Valid from the *normal*, *contained*, *recovery_read_only*, and *fault*
+        states.  Nonces are single-use to prevent token replay.
+        """
+        if self.state not in self._MAINTENANCE_ENTRY_STATES:
+            raise RuntimeError(
+                f"cannot enter maintenance from {self.state.value!r}; "
+                "allowed entry states are: normal, contained, recovery_read_only, fault"
+            )
+        if not physical_presence:
+            raise PermissionError("physical presence is not asserted")
+        authorization = verifier.verify(
+            token,
+            device_id=self.journal.device_id,
+            action="enter_maintenance",
+            state_version=self.state_version,
+            now=now,
+        )
+        if authorization.nonce in self._used_nonces:
+            raise ValueError("token nonce already used")
+        self._used_nonces.add(authorization.nonce)
+        # Persist nonce before state transition to survive a crash between the two.
+        self._save_state()
+        self._transition(AegisState.MAINTENANCE, "maintenance authorized via signed token")
+
+    def exit_maintenance(self, *, compact: bool = False) -> str | None:
+        """Return from MAINTENANCE to NORMAL, optionally compacting the journal.
+
+        If *compact* is ``True``, materialises the current logical image into a
+        new base image (via :meth:`DurableJournal.compact`) and returns the
+        resulting snapshot name.  The snapshot captures the pre-compact state
+        for audit and rollback purposes.
+
+        Resets *containment_sequence* and *recovery_sequence* — the device is
+        returned to clean normal operation.  Physical presence is enforced by
+        requiring this call to originate from the Unix socket.
+        """
+        if self.state is not AegisState.MAINTENANCE:
+            raise RuntimeError(
+                f"exit_maintenance called from {self.state.value!r}; must be in maintenance"
+            )
+        snapshot_name: str | None = None
+        if compact:
+            import time as _t
+            snapshot_name = f"pre-maintenance-{int(_t.time())}"
+            self.journal.compact(snapshot_name)
+            self.audit.append("journal_compacted", {"snapshot_name": snapshot_name})
+        self.containment_sequence = None
+        self.recovery_sequence = None
+        self._transition(AegisState.NORMAL, "maintenance complete")
+        return snapshot_name
+
     def status(self) -> dict:
         return {
             "device_id": self.journal.device_id,

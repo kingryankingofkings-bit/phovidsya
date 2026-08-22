@@ -119,6 +119,17 @@ class AegisDaemon:
             token = command[len("authorize "):].strip()
             return self._socket_authorize(token, engine)
 
+        if command.startswith("maintenance "):
+            token = command[len("maintenance "):].strip()
+            return self._socket_enter_maintenance(token, engine)
+
+        if command.startswith("exit-maintenance"):
+            compact = "compact" in command
+            return self._socket_exit_maintenance(engine, compact=compact)
+
+        if command == "compact":
+            return self._socket_compact(engine)
+
         return json.dumps({"error": f"unknown command: {command!r}"})
 
     def _socket_authorize(self, token: str, engine: AegisEngine) -> str:
@@ -137,6 +148,45 @@ class AegisDaemon:
             return json.dumps({"authorized": True, "state": engine.state.value})
         except (RuntimeError, PermissionError, ValueError) as exc:
             return json.dumps({"authorized": False, "error": str(exc)})
+
+    def _socket_enter_maintenance(self, token: str, engine: AegisEngine) -> str:
+        """Enter maintenance mode via the Unix socket — physical presence is asserted."""
+        if not self.public_key_path or not self.public_key_path.exists():
+            return json.dumps({"error": "no public key configured on this daemon"})
+        try:
+            from ..core.tokens import TokenVerifier
+
+            verifier = TokenVerifier(self.public_key_path.read_bytes())
+            engine.enter_maintenance(
+                token,
+                verifier,
+                physical_presence=True,  # local socket = physical access
+            )
+            return json.dumps({"maintenance": True, "state": engine.state.value})
+        except (RuntimeError, PermissionError, ValueError) as exc:
+            return json.dumps({"maintenance": False, "error": str(exc)})
+
+    def _socket_exit_maintenance(self, engine: AegisEngine, *, compact: bool = False) -> str:
+        """Return to normal state from maintenance, optionally compacting the journal."""
+        try:
+            snapshot_name = engine.exit_maintenance(compact=compact)
+            result: dict = {"state": engine.state.value}
+            if snapshot_name:
+                result["compacted_snapshot"] = snapshot_name
+            return json.dumps(result)
+        except (RuntimeError, ValueError) as exc:
+            return json.dumps({"error": str(exc)})
+
+    def _socket_compact(self, engine: AegisEngine) -> str:
+        """Compact the journal on demand, outside a maintenance window."""
+        import time as _t
+        try:
+            snapshot_name = f"compact-{int(_t.time())}"
+            engine.journal.compact(snapshot_name)
+            engine.audit.append("journal_compacted", {"snapshot_name": snapshot_name})
+            return json.dumps({"compacted": True, "snapshot_name": snapshot_name})
+        except Exception as exc:
+            return json.dumps({"compacted": False, "error": str(exc)})
 
     # ── NBD server ───────────────────────────────────────────────────────────────────
 
