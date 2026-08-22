@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import secrets
 import time
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -143,13 +145,42 @@ async def recovery_export(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
+    # Build a per-file SHA-256 manifest so the recipient can verify the bundle
+    # hasn't been tampered with in transit or at rest.
+    file_hashes: dict[str, str] = {}
+    for file in sorted(snapshot_path.iterdir()):
+        if file.is_file():
+            file_hashes[file.name] = hashlib.sha256(file.read_bytes()).hexdigest()
+
+    manifest: dict = {
+        "device_id": journal.device_id,
+        "exported_at_ns": time.time_ns(),
+        "files": file_hashes,
+        "snapshot_name": snapshot_name,
+        "target_sequence": target_seq,
+    }
+    manifest_bytes = json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
+    (snapshot_path / "manifest.json").write_bytes(manifest_bytes)
+    integrity_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+
+    engine.audit.append(
+        "recovery_export",
+        {
+            "integrity_sha256": integrity_sha256,
+            "snapshot_name": snapshot_name,
+            "target_sequence": target_seq,
+        },
+    )
+
     return {
+        "device_id": journal.device_id,
+        "integrity_sha256": integrity_sha256,
+        "note": (
+            "Snapshot contains base.img and journal.jsonl up to the target sequence. "
+            "Open with DurableJournal(snapshot_path) and read(block, at_sequence=target_sequence). "
+            "Verify integrity: re-hash snapshot files and compare against manifest.json."
+        ),
         "snapshot_name": snapshot_name,
         "snapshot_path": str(snapshot_path),
         "target_sequence": target_seq,
-        "device_id": journal.device_id,
-        "note": (
-            "Snapshot contains base.img and journal.jsonl up to the target sequence. "
-            "Open with DurableJournal(snapshot_path) and read(block, at_sequence=target_sequence)."
-        ),
     }
