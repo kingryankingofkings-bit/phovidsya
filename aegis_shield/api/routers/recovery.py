@@ -11,6 +11,7 @@ from ..auth import require_api_key
 
 router = APIRouter()
 
+# In-memory challenge store: {challenge_id: {action, issued_at}}
 _challenges: dict[str, dict] = {}
 _CHALLENGE_TTL_SECONDS = 120
 
@@ -22,7 +23,16 @@ class ChallengeRequest(BaseModel):
 class AuthorizeRequest(BaseModel):
     challenge_id: str
     token: str
-    physical_presence: bool = False
+    # `physical_presence` is intentionally absent from the HTTP body.
+    #
+    # A network-supplied boolean cannot represent a physical security property.
+    # Physical presence must be asserted by running:
+    #
+    #   echo "authorize <token>" | nc -U /run/aegis-shield/aegis.sock
+    #
+    # The Unix socket is only reachable by a local shell — that is the access
+    # barrier that stands in for hardware physical-presence detection in this
+    # software reference implementation.
 
 
 class ExportRequest(BaseModel):
@@ -42,6 +52,7 @@ async def create_challenge(
         "issued_at": int(time.time()),
         "device_id": request.app.state.engine.journal.device_id,
     }
+    # Expire old challenges
     now = int(time.time())
     expired = [k for k, v in _challenges.items() if now - v["issued_at"] > _CHALLENGE_TTL_SECONDS]
     for k in expired:
@@ -60,7 +71,16 @@ async def authorize_action(
     body: AuthorizeRequest,
     _key: str = Depends(require_api_key),
 ) -> dict:
-    """Submit a signed authorization token for a previously issued challenge."""
+    """Verify a signed token.
+
+    This endpoint validates the token's signature and binding (device ID,
+    action, state version, expiry) but does **not** complete recovery
+    authorization by itself — physical presence must be separately asserted
+    via the local Unix socket (``aegis.sock``).
+
+    Returns ``{"token_valid": true}`` when the token passes all checks,
+    ``{"token_valid": false, "detail": "..."}`` on any failure.
+    """
     challenge = _challenges.pop(body.challenge_id, None)
     if challenge is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found or expired")
@@ -74,17 +94,27 @@ async def authorize_action(
         )
 
     from ...core.tokens import TokenVerifier
+
     try:
         verifier = TokenVerifier(public_pem_path.read_bytes())
-        engine.authorize_recovery(
+        # Verify signature and claims only; do not transition state.
+        verifier.verify(
             body.token,
-            verifier,
-            physical_presence=body.physical_presence,
+            device_id=engine.journal.device_id,
+            action="enter_recovery_read_only",
+            state_version=engine.state_version,
         )
-    except (RuntimeError, PermissionError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except (RuntimeError, ValueError) as exc:
+        return {"token_valid": False, "detail": str(exc)}
 
-    return {"authorized": True, "state": engine.state.value}
+    return {
+        "token_valid": True,
+        "detail": (
+            "Token verified. To complete recovery, assert physical presence via "
+            "the local Unix socket: "
+            "echo 'authorize <token>' | nc -U /run/aegis-shield/aegis.sock"
+        ),
+    }
 
 
 @router.post("/recovery/export")
@@ -93,7 +123,13 @@ async def recovery_export(
     body: ExportRequest,
     _key: str = Depends(require_api_key),
 ) -> dict:
-    """Create a read-only recovery export snapshot."""
+    """Create a read-only recovery export snapshot.
+
+    Takes a point-in-time snapshot of the journal at *target_sequence* (defaults
+    to the current head).  The snapshot directory contains the base image and
+    journal log up to that sequence — enough to reconstruct the namespace state
+    at that moment via ``DurableJournal.read(..., at_sequence=target_sequence)``.
+    """
     engine = request.app.state.engine
     journal = engine.journal
     target_seq = body.target_sequence if body.target_sequence is not None else journal.last_sequence
@@ -112,4 +148,8 @@ async def recovery_export(
         "snapshot_path": str(snapshot_path),
         "target_sequence": target_seq,
         "device_id": journal.device_id,
+        "note": (
+            "Snapshot contains base.img and journal.jsonl up to the target sequence. "
+            "Open with DurableJournal(snapshot_path) and read(block, at_sequence=target_sequence)."
+        ),
     }
