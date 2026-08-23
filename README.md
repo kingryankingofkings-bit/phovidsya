@@ -170,6 +170,7 @@ What it genuinely provides:
 - A faithful model of the hardware state machine that can be integrated, tested, and evaluated.
 - A forensically intact, hash-chained audit log that is fsync'd after every event.
 - A file-backed journal that supports point-in-time recovery snapshots, holding payloads on disk rather than in RAM (~213 B resident per write).
+- Crash recovery that survives a power cut without losing the ability to tell a torn write from tampering: an unacknowledged partial record at the tail is discarded, preserved to a sidecar, and audited; anything else refuses to open.
 - A signed, short-lived, state-version-bound recovery token scheme with single-use nonces.
 - A detection policy weighted toward behaviour over content, because content cannot carry the decision: a compressed archive and an encrypted file are both ~8 bits/byte. What separates them is reading existing data and replacing it in place.
 - Containment that fails closed: if the persisted engine state is missing, unreadable, or does not match its digest in the audit chain, the engine enters `fault` with writes denied rather than booting into `normal`.

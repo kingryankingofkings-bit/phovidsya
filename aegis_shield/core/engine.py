@@ -74,6 +74,20 @@ class AegisEngine:
         self.recovery_sequence: int | None = None
         self._used_nonces: dict[str, int] = {}
 
+        # A journal that discarded an unacknowledged partial record at open must
+        # say so in the audit log. Recovery is legitimate, but it is a fact
+        # about the device's history and belongs in the forensic record.
+        recovered = getattr(journal, "recovered_tail", None)
+        if recovered is not None:
+            self.audit.append(
+                "journal_tail_recovered",
+                {
+                    "bytes_discarded": recovered.bytes_discarded,
+                    "reason": recovered.reason,
+                    "preserved_as": recovered.sidecar,
+                },
+            )
+
         persisted, load_error = self._load_state()
         if load_error is not None:
             # A state file that exists but cannot be trusted must never be treated

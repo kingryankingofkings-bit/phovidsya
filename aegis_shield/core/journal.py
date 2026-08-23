@@ -63,6 +63,15 @@ class JournalCorruptionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class _TailRecovery:
+    """What was discarded when opening a journal with a torn tail."""
+
+    bytes_discarded: int
+    reason: str
+    sidecar: str
+
+
 class DurableJournal:
     """File-backed, append-and-fsync reference journal.
 
@@ -134,6 +143,8 @@ class DurableJournal:
         # its own and must not be a footgun.
         self._log_reader = None
         self._reader_lock = threading.Lock()
+        #: Set when a torn tail was discarded at open; the engine audits it.
+        self.recovered_tail: _TailRecovery | None = None
         self._replay()
 
     @staticmethod
@@ -160,11 +171,30 @@ class DurableJournal:
         Reads with explicit ``readline()`` rather than iterating the handle:
         iteration buffers ahead, which makes ``tell()`` meaningless, and every
         record's byte offset has to be exact for reads to find it later.
+
+        **Torn tails.** A crash between ``write()`` and ``fsync()`` — an
+        ordinary power cut — can leave a partial record at the end of the log.
+        That record was never acknowledged: ``append()`` had not returned, so no
+        caller was ever told the write succeeded, and discarding it loses
+        nothing anyone believes is durable. Refusing to open would instead make
+        the namespace permanently unrecoverable after a power loss.
+
+        The allowance is strictly limited to the **final** record. A malformed
+        record anywhere earlier is genuine corruption or tampering and still
+        raises, because a later record's presence proves the earlier one was
+        acknowledged and complete when it was written.
+
+        Discarded bytes are copied to a ``journal.jsonl.torn-<n>`` sidecar
+        before the log is truncated. This is a forensic artifact; nothing is
+        destroyed silently.
         """
         expected_hash = "0" * 64
         expected_sequence = 1
         offset = 0
-        with (self.root / self.LOG).open("rb") as handle:
+        log_path = self.root / self.LOG
+        file_size = log_path.stat().st_size
+
+        with log_path.open("rb") as handle:
             line_number = 0
             while True:
                 raw = handle.readline()
@@ -175,26 +205,51 @@ class DurableJournal:
                 line_number += 1
                 if not raw.strip():
                     continue
+
+                # A torn write leaves an INCOMPLETE record: bytes stop partway,
+                # so the line does not parse or is missing fields. It cannot
+                # produce a complete, well-formed record that merely fails its
+                # checksum — a balanced JSON object with every field present
+                # means every byte of that record reached the disk.
+                #
+                # So the torn-tail allowance is limited to structural failure,
+                # and only at EOF. Any integrity failure on a record that parses
+                # is corruption or tampering, tail or not. Without that limit an
+                # attacker could delete the newest evidence by flipping bits in
+                # it and having the journal quietly drop it on next open.
                 try:
                     value = json.loads(raw)
                     stored_hash = value.pop("record_hash")
-                    calculated = hashlib.sha256(_canonical(value)).hexdigest()
                     data = base64.b64decode(value["data_b64"], validate=True)
+                    previous_hash = value["previous_hash"]
+                    sequence = int(value["sequence"])
+                    crc = int(value["crc32"])
+                    blocks = int(value.get("blocks", 1))
+                    block = int(value["block"])
                 except Exception as exc:
-                    raise JournalCorruptionError(f"invalid journal line {line_number}") from exc
-                if stored_hash != calculated:
-                    raise JournalCorruptionError(f"hash mismatch on line {line_number}")
-                if value["previous_hash"] != expected_hash:
-                    raise JournalCorruptionError(f"chain mismatch on line {line_number}")
-                if int(value["sequence"]) != expected_sequence:
-                    raise JournalCorruptionError(f"sequence mismatch on line {line_number}")
-                if zlib.crc32(data) != int(value["crc32"]):
-                    raise JournalCorruptionError(f"CRC mismatch on line {line_number}")
-                blocks = int(value.get("blocks", 1))
+                    if offset >= file_size:
+                        self._discard_torn_tail(line_offset, "incomplete final record")
+                        offset = line_offset
+                        break
+                    raise JournalCorruptionError(
+                        f"invalid journal record on line {line_number}"
+                    ) from exc
+
+                def _fail(reason: str) -> None:
+                    raise JournalCorruptionError(f"{reason} on line {line_number}")
+
+                if stored_hash != hashlib.sha256(_canonical(value)).hexdigest():
+                    _fail("hash mismatch")
+                if previous_hash != expected_hash:
+                    _fail("chain mismatch")
+                if sequence != expected_sequence:
+                    _fail("sequence mismatch")
+                if zlib.crc32(data) != crc:
+                    _fail("CRC mismatch")
                 if blocks < 1 or len(data) != blocks * self.block_size:
-                    raise JournalCorruptionError(f"record size mismatch on line {line_number}")
-                block = int(value["block"])
+                    _fail("record size mismatch")
                 self._check_range(block, blocks)
+
                 position = len(self._index)
                 self._index.append(
                     _RecordIndex(
@@ -209,9 +264,30 @@ class DurableJournal:
                     self._overlay[block + block_offset] = position
                 expected_hash = stored_hash
                 expected_sequence += 1
+
         self._last_hash = expected_hash
         self._next_sequence = expected_sequence
         self._log_size = offset
+
+    def _discard_torn_tail(self, offset: int, reason: str) -> None:
+        """Preserve and remove an unacknowledged partial record at the tail."""
+        log_path = self.root / self.LOG
+        with log_path.open("rb") as handle:
+            handle.seek(offset)
+            torn = handle.read()
+
+        sidecar = log_path.with_suffix(log_path.suffix + f".torn-{offset}")
+        self._atomic_write(sidecar, torn)
+
+        with log_path.open("r+b") as handle:
+            handle.truncate(offset)
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._fsync_directory(self.root)
+
+        self.recovered_tail = _TailRecovery(
+            bytes_discarded=len(torn), reason=reason, sidecar=sidecar.name
+        )
 
     # ── payload access ───────────────────────────────────────────────────────
 

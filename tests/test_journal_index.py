@@ -169,7 +169,13 @@ def test_append_after_reopen_continues_the_chain(tmp_path: Path) -> None:
 # Corruption must still be caught — offsets must not weaken integrity
 # ---------------------------------------------------------------------------
 
-def test_truncated_log_is_detected(tmp_path: Path) -> None:
+def test_truncated_tail_recovers_rather_than_bricking(tmp_path: Path) -> None:
+    """A torn final record is discarded — see tests/test_crash_recovery.py.
+
+    This once asserted that truncation raised. It does not any more: refusing
+    to open would make an ordinary power cut permanently unrecoverable, and the
+    torn record was never acknowledged to any caller.
+    """
     root = tmp_path / "ns"
     j = DurableJournal.provision(root, blocks=16, block_size=BS)
     for i in range(4):
@@ -178,6 +184,25 @@ def test_truncated_log_is_detected(tmp_path: Path) -> None:
 
     log = root / "journal.jsonl"
     log.write_bytes(log.read_bytes()[:-40])  # tear the final record
+
+    reopened = DurableJournal(root)
+    assert reopened.last_sequence == 3
+    assert reopened.recovered_tail is not None
+
+
+def test_truncation_in_the_middle_is_still_detected(tmp_path: Path) -> None:
+    """Only the tail is forgiven. Damage with records after it is corruption."""
+    root = tmp_path / "ns"
+    j = DurableJournal.provision(root, blocks=16, block_size=BS)
+    for i in range(4):
+        j.append(i, _payload(f"t{i}"))
+    j.close()
+
+    log = root / "journal.jsonl"
+    lines = log.read_bytes().splitlines(True)
+    lines[1] = lines[1][:-40] + b"\n"
+    log.write_bytes(b"".join(lines))
+
     with pytest.raises(JournalCorruptionError):
         DurableJournal(root)
 
