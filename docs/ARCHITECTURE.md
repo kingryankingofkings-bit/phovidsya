@@ -125,6 +125,25 @@ compacted periodically — `compact()` materialises the current image and resets
 it. Compaction is refused outside `normal`/`maintenance`, because the journal is
 the forensic record of an active incident.
 
+## Crash recovery
+
+A crash between `write()` and `fsync()` — an ordinary power cut — can leave a
+partial record at the end of `journal.jsonl`. The journal distinguishes that
+from an attack:
+
+| Damage | Response | Reasoning |
+|---|---|---|
+| **Final** record structurally incomplete | Discard it, truncate the log, audit the event | `append()` never returned, so no caller was told the write succeeded. Discarding loses nothing anyone believes is durable. |
+| Final record complete but fails hash/CRC/chain | **Refuse to open** | A torn write truncates; it cannot produce a balanced JSON object with every field present. A complete record that fails its checksum was tampered with. |
+| Any record **before** the tail malformed | **Refuse to open** | A later record's existence proves the earlier one was complete when written. |
+
+That second row matters: if a well-formed-but-corrupt tail were discarded, an
+attacker could delete the newest evidence by flipping bits in it.
+
+Discarded bytes are copied to `journal.jsonl.torn-<offset>` before truncation,
+and the engine appends a `journal_tail_recovered` audit event recording the byte
+count, the reason, and the sidecar name. Recovery is never silent.
+
 ## Engine state integrity
 
 `engine_state.json` records the current state, version, sequence anchors, and

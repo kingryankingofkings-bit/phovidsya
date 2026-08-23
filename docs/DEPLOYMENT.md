@@ -58,6 +58,26 @@ echo "maintenance $TOKEN" | nc -U /run/aegis-shield/aegis.sock
 echo "exit-maintenance"   | nc -U /run/aegis-shield/aegis.sock
 ```
 
+## After an unclean shutdown
+
+The daemon recovers automatically. If the crash interrupted a write, the
+incomplete record is discarded and the removed bytes are preserved as
+`journal.jsonl.torn-<offset>` inside the namespace directory. Check for it:
+
+```bash
+ls /var/lib/aegis-shield/namespace/journal.jsonl.torn-*
+journalctl -u aegis-shield | grep journal_tail_recovered
+```
+
+The audit log records how many bytes were dropped and why. The discarded record
+was never acknowledged to the writing application, so no completed write is
+lost — but the sidecar is kept for inspection rather than deleted.
+
+If the daemon instead **refuses to start** with a `JournalCorruptionError`, the
+damage is not a torn tail: something altered a record that had already been
+committed. Treat that as a potential attack on the evidence. Do not delete the
+journal — take a copy of the whole namespace directory first.
+
 ## Uninstall
 
 ```bash
