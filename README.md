@@ -111,6 +111,10 @@ aegis-shield generate-trace <output.jsonl> --pattern <name>
 
 aegis-shield replay <namespace-dir> <trace.jsonl>
     Replay a trace against a provisioned namespace.
+
+aegis-shield benchmark [--seeds N] [--policy-config <yaml>]
+    Measure the policy against the synthetic workload corpus and report
+    false positives, true positives, and containment headroom.
 ```
 
 ---
@@ -139,6 +143,16 @@ See [docs/API.md](docs/API.md) for the full reference.
 pytest tests/ -v
 ```
 
+## Measuring detection
+
+```bash
+aegis-shield benchmark
+```
+
+Scores 7 benign and 4 ransomware-shaped synthetic workloads through the real
+policy and reports the margin between them. Synthetic corpus only — see
+[docs/DETECTION.md](docs/DETECTION.md) for what it can and cannot establish.
+
 ---
 
 ## Capability statement
@@ -146,7 +160,7 @@ pytest tests/ -v
 This software reference deployment is **not** a production-certified security product. Specifically:
 
 - **Enforcement is software-only**: a privileged process on the same host can bypass it. Hardware enforcement requires the FPGA PCIe interposer described in `Aegis-Block/docs/`.
-- **Detection coefficients are engineering estimates**: the policy thresholds and weights have not been validated against a production ransomware corpus. Containment is on by default, but no true-positive or false-positive rate has been measured.
+- **Detection coefficients are measured against a synthetic corpus, not real ransomware.** `aegis-shield benchmark` reports 0% false positives on 7 benign workloads and 75% true positives on 4 ransomware-shaped ones, with 0.113 of headroom before a legitimate high-entropy workload would trigger containment. That is a real measurement of I/O *shape*, and it says nothing about efficacy against real malware. An evasive low-and-slow pattern is not caught at all. See [docs/DETECTION.md](docs/DETECTION.md).
 - **No TLS out of the box**: use a reverse proxy (nginx, Caddy) in production.
 - **Physical presence is local shell access**, asserted by reaching the daemon over its Unix socket. Wire it to a real physical input in production deployments.
 - **The Rust crates are specifications, not a runtime layer**: they compile and self-test, but the Python daemon does not call them. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -157,6 +171,7 @@ What it genuinely provides:
 - A forensically intact, hash-chained audit log that is fsync'd after every event.
 - A file-backed journal that supports point-in-time recovery snapshots.
 - A signed, short-lived, state-version-bound recovery token scheme with single-use nonces.
+- A detection policy weighted toward behaviour over content, because content cannot carry the decision: a compressed archive and an encrypted file are both ~8 bits/byte. What separates them is reading existing data and replacing it in place.
 - Containment that fails closed: if the persisted engine state is missing, unreadable, or does not match its digest in the audit chain, the engine enters `fault` with writes denied rather than booting into `normal`.
 
 ---

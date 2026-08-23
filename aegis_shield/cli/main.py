@@ -359,5 +359,49 @@ def replay(namespace_dir: Path, trace_file: Path, policy_config: Optional[Path])
     click.echo(f"Final state: {engine.state.value}")
 
 
+# ---------------------------------------------------------------------------
+# benchmark
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--policy-config", default=None, type=click.Path(path_type=Path))
+@click.option("--seeds", default=12, show_default=True, type=int,
+              help="Number of RNG seeds to average over")
+@click.option("--blocks", default=512, show_default=True, type=int)
+def benchmark(policy_config: Optional[Path], seeds: int, blocks: int) -> None:
+    """Measure the policy against the synthetic workload corpus.
+
+    Reports false positives on benign workloads and true positives on
+    ransomware-shaped ones. These are SYNTHETIC workloads modelling I/O shape —
+    not real malware. See docs/DETECTION.md for what this can and cannot show.
+    """
+    from ..core.benchmark import format_report, run_benchmark, run_multi_seed
+    from ..core.config import load_policy
+    from ..core.policy import PolicyConfig
+
+    config = load_policy(policy_config) if policy_config else PolicyConfig()
+    click.echo(format_report(run_benchmark(config, blocks=blocks)))
+
+    multi = run_multi_seed(config, seeds=tuple(range(1, seeds + 1)), blocks=blocks)
+    click.echo("")
+    click.echo(f"across {multi['seeds']} seeds:")
+    click.echo(f"  loudest benign     : {multi['loudest_benign']:.3f}")
+    click.echo(f"  quietest attack    : {multi['quietest_attack']:.3f}")
+    click.echo(f"  containment margin : {multi['containment_margin']:+.3f}")
+    click.echo(f"  worst-case FPR     : {multi['max_false_positive_rate']:.0%}")
+    click.echo(f"  worst-case TPR     : {multi['min_true_positive_rate']:.0%}")
+    click.echo("")
+    click.echo("Synthetic corpus only. Not validated against real ransomware.")
+
+    if multi["containment_margin"] < 0.05:
+        click.echo("")
+        click.echo(
+            f"[warning] Only {multi['containment_margin']:+.3f} of headroom between the "
+            "loudest benign workload and the containment threshold. A legitimate "
+            "high-entropy workload could freeze the device.",
+            err=True,
+        )
+
+
 if __name__ == "__main__":
     cli()

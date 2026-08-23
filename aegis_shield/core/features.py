@@ -57,8 +57,15 @@ class WindowAnalyzer:
         elif event.kind is IoKind.WRITE:
             entropy = shannon_entropy(event.payload)
             covered = range(event.lba, event.lba + event.blocks)
+            # A write is an overwrite when it destroys content that was already
+            # there — not merely when this analyzer happened to observe the
+            # earlier write. Ransomware sweeping across a namespace touches each
+            # block once, so a window-local definition reads 0.0 for exactly the
+            # pattern that matters most. The before-image is authoritative:
+            # non-zero content means real data is being replaced.
             overwrite = any(self._written_blocks[block] for block in covered)
             if before is not None:
+                overwrite = overwrite or any(before)
                 change = changed_byte_fraction(before, event.payload)
             sequential = self._last_write_end == event.lba
             read_before_write = any(
