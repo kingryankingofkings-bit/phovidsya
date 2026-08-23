@@ -152,16 +152,45 @@ def test_recovery_requires_physical_presence(journal: DurableJournal, tmp_path: 
 # ── Lab policy — containment on score threshold ───────────────────────────────
 
 def test_lab_policy_containment(lab_engine: AegisEngine) -> None:
-    """With the aggressive lab policy, high-entropy broad-overwrite triggers containment."""
+    """A read-then-overwrite encryption sweep triggers containment.
+
+    This models what ransomware actually does: read existing user data, then
+    replace it in place with ciphertext, across the namespace. Bulk high-entropy
+    writes to *blank* blocks are deliberately NOT containment-worthy — that is
+    what copying a compressed archive looks like, and treating it as an attack
+    would freeze healthy machines. See docs/DETECTION.md.
+    """
     import os
-    # Write many high-entropy random blocks across many LBAs to exceed the lab threshold
+
+    # The device is in service: blocks already hold user content.
+    for lba in range(lab_engine.journal.blocks):
+        lab_engine.write(lba, b"user document content ".ljust(BLOCK_SIZE, b"."))
+
+    # Encryption sweep: read each block, then overwrite it with ciphertext.
     for i in range(64):
-        lba = (i * 3) % lab_engine.journal.blocks  # non-sequential, spread out
-        payload = os.urandom(BLOCK_SIZE)
+        lba = (i * 3) % lab_engine.journal.blocks
         try:
-            lab_engine.write(lba, payload)
+            lab_engine.read(lba)
+            lab_engine.write(lba, os.urandom(BLOCK_SIZE))
         except PermissionError:
             break  # already contained
 
-    # Should have transitioned to CONTAINED
     assert lab_engine.state is AegisState.CONTAINED
+    assert lab_engine.containment_sequence is not None
+
+
+def test_bulk_high_entropy_write_is_not_contained(lab_engine: AegisEngine) -> None:
+    """Copying an archive onto fresh blocks must not freeze the device.
+
+    Compressed and encrypted bytes are statistically identical (~8 bits/byte).
+    Entropy alone cannot separate them, so a detector that contains on entropy
+    plus volume alone will freeze a machine for copying a .tar.gz. Even under
+    the aggressive lab policy this must stay quiet.
+    """
+    import os
+
+    for i in range(64):
+        lba = (i * 3) % lab_engine.journal.blocks
+        lab_engine.write(lba, os.urandom(BLOCK_SIZE))
+
+    assert lab_engine.state is not AegisState.CONTAINED

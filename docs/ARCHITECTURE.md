@@ -69,6 +69,9 @@ not represented anywhere in the current implementation.
 | `namespace_coverage_fraction` | Broad campaigns |
 | `read_before_write_fraction` | File-replace pattern |
 | `deallocate_fraction` | Secure wipe after encrypt |
+
+Entropy is *necessary but not sufficient*: it fires identically for a `.tar.gz`
+copy and for encryption. `read_before_write_fraction` is the discriminator.
 | `destructive_command_seen` | Format NVM, Sanitize — immediate containment |
 
 ## Policy
@@ -80,11 +83,14 @@ Containment threshold: 0.82 — freezes the namespace. **Enabled by default**
 (`containment_enabled=True`); set it to `false` in a policy file to run in
 detect-only mode, and the daemon will warn at startup that it is off.
 
-The 0.82 threshold sits well above the ~0.65 that sustained maximum-entropy
-writes alone produce, so containment requires several corroborating signals
-rather than entropy in isolation. These coefficients remain engineering
-estimates — they have not been validated against a production ransomware
-corpus.
+Weights are behaviour-dominant (0.58 behavioural vs 0.30 content) because
+content cannot carry the decision: compressed archives and encrypted files are
+both ~8 bits/byte. Measured against the synthetic corpus, the loudest benign
+workload peaks at 0.707, leaving 0.113 of headroom before containment.
+
+These coefficients are measured against synthetic workloads, not real
+ransomware. See [DETECTION.md](DETECTION.md) for the measurement, its results,
+and its limits — including one attack pattern that is not caught.
 
 ## Recovery token format
 
