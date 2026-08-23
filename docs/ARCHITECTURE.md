@@ -108,6 +108,23 @@ sequence) and `enter_maintenance` (re-enable writes for servicing). Issue either
 with `aegis-shield issue-token --action <action>`. Both are redeemed over the
 Unix socket only — never over HTTP.
 
+## Journal memory
+
+Payloads live on disk, not in RAM. The in-memory index holds a byte offset per
+record; `read()` seeks into `journal.jsonl` and re-checks the CRC before
+returning bytes, so corruption occurring after startup is caught on the read
+path rather than trusted from replay time.
+
+| | per write | 64 GiB namespace, one full rewrite |
+|---|---:|---:|
+| payloads resident (before) | 4096 B | ~68 GB |
+| offset index (now) | ~213 B | ~3.5 GB |
+
+The index still grows with record count, so long-lived namespaces should be
+compacted periodically — `compact()` materialises the current image and resets
+it. Compaction is refused outside `normal`/`maintenance`, because the journal is
+the forensic record of an active incident.
+
 ## Engine state integrity
 
 `engine_state.json` records the current state, version, sequence anchors, and
