@@ -96,7 +96,84 @@ def test_targeted_encryption_is_contained(report) -> None:
 
 
 def test_true_positive_rate_does_not_regress(multi) -> None:
-    assert multi["min_true_positive_rate"] >= 0.75
+    """60%, not 75%: the corpus now includes the minimal evasion case.
+
+    That is the corpus becoming more honest, not the detector getting worse.
+    Two of five ransomware workloads escape containment, and both do so by
+    interleaving benign writes.
+    """
+    assert multi["min_true_positive_rate"] >= 0.60
+
+
+def test_one_interleaved_write_defeats_containment(report) -> None:
+    """A single benign write per encryption escapes containment.
+
+    This is the cheapest evasion that works, and it bounds how much effort the
+    current design demands of an attacker: almost none. Pinned so the cost of
+    evasion stays visible rather than being rediscovered later.
+
+    It does still ALERT — escaping containment is not the same as being
+    invisible — which is why the alert threshold sits at 0.72 rather than
+    being merged into the containment threshold.
+    """
+    result = next(r for r in report.results if r.name == "minimal_evasion")
+    assert not result.contained, (
+        "minimal_evasion is now contained — good news; update docs/DETECTION.md, "
+        "which documents it as a known gap"
+    )
+    assert result.alerted, "evasion below containment must at least raise ELEVATED"
+
+
+def test_window_size_cannot_close_the_dilution_gap() -> None:
+    """Enlarging the window does not bring a diluted attack up to containment.
+
+    A windowed *mean* is close to ratio-invariant: averaging over more
+    operations at the same malicious:benign ratio yields nearly the same
+    average. Measured over a 1:2 interleave, growing the window 128 -> 512
+    moves the peak by only ~0.06 and then plateaus (1024 scores below 512),
+    while roughly 0.18 would be needed to reach the 0.82 threshold.
+
+    So window size is not the lever. Any fix has to *accumulate* evidence
+    across the campaign rather than average it away.
+    """
+    import random
+
+    from aegis_shield.core.features import AnalyzerConfig, WindowAnalyzer
+    from aegis_shield.core.types import IoEvent, IoKind
+    from aegis_shield.core.workloads import _incompressible, _text
+
+    def peak(window: int) -> float:
+        analyzer = WindowAnalyzer(
+            AnalyzerConfig(window_operations=window, namespace_blocks=512)
+        )
+        policy = Policy(PolicyConfig())
+        rng = random.Random(7)
+        written = {b: _text(rng, 4096, "user") for b in range(512)}
+        best = 0.0
+        for i in range(1200):
+            if i % 3 == 0:
+                target = (i * 7) % 512
+                analyzer.observe(IoEvent(IoKind.READ, target, 1, b"", 0))
+                event = IoEvent(IoKind.WRITE, target, 1, _incompressible(rng, 4096), 0)
+            else:
+                target = i % 512
+                event = IoEvent(IoKind.WRITE, target, 1, _text(rng, 4096), 0)
+            features = analyzer.observe(event, before=written.get(target, bytes(4096)))
+            written[target] = event.payload
+            best = max(best, policy.evaluate(features).score)
+        return best
+
+    baseline, enlarged, huge = peak(128), peak(512), peak(1024)
+    threshold = PolicyConfig().containment_threshold
+
+    # A 4x window buys a little, but nowhere near enough.
+    assert enlarged - baseline < 0.10, "window growth helped more than measured"
+    assert enlarged < threshold, (
+        f"a 512-op window now reaches containment ({enlarged:.3f} >= {threshold}) "
+        "— revisit docs/DETECTION.md, which says window size cannot close the gap"
+    )
+    # And it plateaus: 8x is no better than 4x.
+    assert huge <= enlarged + 0.02, "returns did not diminish as documented"
 
 
 def test_evasive_workload_is_documented_as_missed(report) -> None:

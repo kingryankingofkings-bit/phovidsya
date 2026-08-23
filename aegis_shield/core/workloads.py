@@ -200,6 +200,22 @@ def _low_and_slow(blocks: int, block_size: int, seed: int) -> Iterator[IoEvent]:
             yield IoEvent(IoKind.WRITE, i % blocks, 1, _text(rng, block_size), 0)
 
 
+def _minimal_evasion(blocks: int, block_size: int, seed: int) -> Iterator[IoEvent]:
+    """The cheapest evasion that works: one benign write per encryption.
+
+    Not an exotic attack — a single interleaved write is enough to drop the
+    windowed mean below the containment threshold. Included because it bounds
+    how much evasion effort the current design actually demands, which is
+    almost none. See ``docs/DETECTION.md``.
+    """
+    rng = random.Random(seed)
+    for i in range(240):
+        target = (i * 7) % blocks
+        yield IoEvent(IoKind.READ, target, 1, b"", 0)
+        yield IoEvent(IoKind.WRITE, target, 1, _incompressible(rng, block_size), 0)
+        yield IoEvent(IoKind.WRITE, (target + 1) % blocks, 1, _text(rng, block_size), 0)
+
+
 def _targeted_documents(blocks: int, block_size: int, seed: int) -> Iterator[IoEvent]:
     """Encrypt only a subset — documents, not the whole namespace.
 
@@ -241,6 +257,9 @@ RANSOMWARE: tuple[Workload, ...] = (
              "Encryption diluted with benign traffic (evasive)", _low_and_slow),
     Workload("targeted_documents", "ransomware",
              "Encrypt a narrow document region only", _targeted_documents),
+    Workload("minimal_evasion", "ransomware",
+             "One benign write per encryption — the cheapest evasion that works",
+             _minimal_evasion),
 )
 
 ALL: tuple[Workload, ...] = BENIGN + RANSOMWARE

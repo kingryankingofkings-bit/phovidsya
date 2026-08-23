@@ -78,7 +78,7 @@ service*, not a blank one — see the caveat below).
 | | Result |
 |---|---|
 | False positives | **0 of 7** benign workloads |
-| True positives | **3 of 4** ransomware-shaped workloads |
+| True positives | **3 of 5** ransomware-shaped workloads |
 | Loudest benign | 0.707 (`software_update`) |
 | Quietest attack | 0.605 (`low_and_slow`) |
 | Containment threshold | 0.82 |
@@ -100,24 +100,65 @@ Before this was measured, the weights were content-dominant and the numbers were
 Copying an archive scored 0.816 against a 0.820 trigger. The margin was four
 thousandths. Nothing was wrong with the code — nobody had ever measured it.
 
-## Known gaps
+## Known gaps — and how cheap evasion actually is
 
-**`low_and_slow` is not caught.** Encryption interleaved with benign traffic
-(1 malicious write per 2 benign) dilutes every windowed signal below threshold.
-It peaks at 0.605 against a 0.82 threshold, and below the 0.72 alert too, so it
-passes silently.
+**One interleaved benign write per encryption defeats containment.** Not an
+exotic technique; the minimum possible effort.
 
-No threshold fixes this: the quietest attack (0.605) scores *below* the loudest
-benign workload (0.707). The sets overlap. Catching evasive attacks needs
-something this detector does not have — longer-horizon state across many
-windows, or per-file rather than per-block correlation. A test
-(`test_evasive_workload_is_documented_as_missed`) asserts this gap so it stays
-visible rather than being quietly forgotten.
+| Benign writes per encryption | Peak score | Contained (0.82)? | Alerted (0.72)? |
+|---:|---:|---|---|
+| 0 (straight sweep) | 0.907 | **yes** | yes |
+| 1 (`minimal_evasion`) | 0.776 | no | yes |
+| 2 (`low_and_slow`) | 0.606 | no | no |
+| 4 | 0.595 | no | no |
+| 8 | 0.553 | no | no |
 
-**Separation is negative (−0.102).** Stated plainly: there is no single
-threshold that cleanly separates all attacks from all benign work in this
-corpus. The shipped configuration prioritises never freezing a healthy machine,
-and accepts missing the evasive case.
+The cliff is between 0 and 1. That is the honest measure of how much the
+current design demands of an attacker.
+
+Note the middle row still **alerts**. Escaping containment is not the same as
+being invisible, and it is why the alert threshold sits at 0.72 rather than
+being folded into the containment threshold: it is the only signal an operator
+gets in the 1:1 case.
+
+### A bigger window does not fix it
+
+An earlier version of this document said the gap needed "longer-horizon state
+across many windows". **That was measured and is wrong**, so it is corrected
+here. Over a 1:2 interleave:
+
+| Window | Peak score |
+|---:|---:|
+| 128 (shipped) | 0.645 |
+| 256 | 0.680 |
+| 512 | 0.702 |
+| 1024 | 0.681 |
+
+A 4× window buys ~0.06 and then plateaus — 1024 scores *below* 512. Roughly
+0.18 would be needed to reach containment.
+
+The reason is structural: the policy consumes windowed **means**, and a mean is
+close to ratio-invariant. Averaging over more operations at the same
+malicious-to-benign ratio yields nearly the same average. Enlarging the window
+does not sharpen a ratio; it just measures the same ratio more smoothly.
+
+**Any fix has to accumulate rather than average.** An attacker encrypting
+10,000 files slowly still performs 10,000 read-encrypt-overwrite operations; a
+running *count* of high-suspicion operations sees that campaign, and a windowed
+*mean* structurally cannot. That is a different mechanism, not a tuning change.
+
+It is deliberately not implemented here. Choosing its thresholds would mean
+tuning a new decision path against the eleven synthetic workloads on this page,
+which is how a detector comes to score well in a lab and badly in the field.
+That mechanism needs real traces before it needs code.
+
+`test_one_interleaved_write_defeats_containment` and
+`test_window_size_cannot_close_the_dilution_gap` pin both findings.
+
+**Separation is negative (−0.102).** Stated plainly: no single threshold
+separates all attacks from all benign work in this corpus. The shipped
+configuration prioritises never freezing a healthy machine and accepts missing
+the diluted cases.
 
 ## What this measurement cannot tell you
 
@@ -128,7 +169,8 @@ and accepts missing the evasive case.
   production fleet. A real environment will contain workloads not modelled here,
   and some may score higher than 0.707.
 - **Nothing about tuned evasion.** An attacker who reads this file can stay under
-  the threshold. `low_and_slow` demonstrates that without even trying hard.
+  the threshold — and the table above shows one interleaved write is enough. The
+  corpus measures the *cost* of evasion, not resistance to it.
 - **Nothing about the hardware design.** These are software-model measurements.
 
 ## What would constitute real validation
