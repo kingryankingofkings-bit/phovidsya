@@ -4,18 +4,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..auth import require_api_key
 
 router = APIRouter()
+log = logging.getLogger("aegis.api.recovery")
 
-# In-memory challenge store: {challenge_id: {action, issued_at}}
-_challenges: dict[str, dict] = {}
 _CHALLENGE_TTL_SECONDS = 120
+# Bounded so an authenticated caller cannot grow the store without limit inside
+# the TTL window.  Oldest entries are evicted first.
+_MAX_CHALLENGES = 256
+# Snapshots are full copies of the base image; without a cap a caller could fill
+# the volume the journal itself depends on.
+_MAX_SNAPSHOTS = 32
+# Actions a challenge may be issued for.
+_ALLOWED_ACTIONS = frozenset({"enter_recovery_read_only", "enter_maintenance"})
+
+
+def _challenge_store(request: Request) -> dict:
+    """Per-application challenge store (never a module global)."""
+    store = getattr(request.app.state, "challenges", None)
+    if store is None:
+        store = {}
+        request.app.state.challenges = store
+    return store
 
 
 class ChallengeRequest(BaseModel):
@@ -48,17 +66,26 @@ async def create_challenge(
     _key: str = Depends(require_api_key),
 ) -> dict:
     """Issue a one-time challenge nonce for a named action."""
+    if body.action not in _ALLOWED_ACTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unsupported action; expected one of {sorted(_ALLOWED_ACTIONS)}",
+        )
+    challenges = _challenge_store(request)
+    now = int(time.time())
+    for key in [
+        k for k, v in challenges.items() if now - v["issued_at"] > _CHALLENGE_TTL_SECONDS
+    ]:
+        del challenges[key]
+    while len(challenges) >= _MAX_CHALLENGES:
+        challenges.pop(next(iter(challenges)))
+
     challenge_id = secrets.token_hex(16)
-    _challenges[challenge_id] = {
+    challenges[challenge_id] = {
         "action": body.action,
-        "issued_at": int(time.time()),
+        "issued_at": now,
         "device_id": request.app.state.engine.journal.device_id,
     }
-    # Expire old challenges
-    now = int(time.time())
-    expired = [k for k, v in _challenges.items() if now - v["issued_at"] > _CHALLENGE_TTL_SECONDS]
-    for k in expired:
-        del _challenges[k]
     return {
         "challenge_id": challenge_id,
         "action": body.action,
@@ -83,7 +110,7 @@ async def authorize_action(
     Returns ``{"token_valid": true}`` when the token passes all checks,
     ``{"token_valid": false, "detail": "..."}`` on any failure.
     """
-    challenge = _challenges.pop(body.challenge_id, None)
+    challenge = _challenge_store(request).pop(body.challenge_id, None)
     if challenge is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found or expired")
 
@@ -139,11 +166,33 @@ async def recovery_export(
     if not 0 <= target_seq <= journal.last_sequence:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target_sequence")
 
-    snapshot_name = f"export-{int(time.time())}-seq{target_seq}"
+    snapshot_root = journal.root / "snapshots"
+    existing = sorted(p for p in snapshot_root.iterdir() if p.is_dir()) if snapshot_root.exists() else []
+    if len(existing) >= _MAX_SNAPSHOTS:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail=(
+                f"snapshot limit reached ({_MAX_SNAPSHOTS}); remove old snapshots "
+                "under the namespace's snapshots/ directory before exporting again"
+            ),
+        )
+
+    # Nanosecond stamp plus random suffix: two exports in the same second, of the
+    # same sequence, must both succeed rather than collide.
+    snapshot_name = f"export-{time.time_ns()}-seq{target_seq}-{secrets.token_hex(3)}"
     try:
-        snapshot_path = journal.snapshot(snapshot_name)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        snapshot_path = journal.snapshot(snapshot_name, at_sequence=target_seq)
+    except FileExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="snapshot already exists"
+        )
+    except (OSError, ValueError) as exc:
+        # Never return raw exception text: it leaks absolute filesystem paths.
+        log.error("recovery export failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="snapshot could not be created",
+        )
 
     # Build a per-file SHA-256 manifest so the recipient can verify the bundle
     # hasn't been tampered with in transit or at rest.
@@ -176,7 +225,7 @@ async def recovery_export(
         "device_id": journal.device_id,
         "integrity_sha256": integrity_sha256,
         "note": (
-            "Snapshot contains base.img and journal.jsonl up to the target sequence. "
+"Snapshot contains base.img and journal.jsonl truncated at target_sequence. "
             "Open with DurableJournal(snapshot_path) and read(block, at_sequence=target_sequence). "
             "Verify integrity: re-hash snapshot files and compare against manifest.json."
         ),

@@ -44,7 +44,8 @@ aegis-shield provision ./namespace --blocks 1024
 aegis-shield start ./namespace --port 8443 --public-key admin_public.pem
 ```
 
-Open [http://localhost:8443](http://localhost:8443) for the dashboard.
+Open [http://localhost:8443/ui](http://localhost:8443/ui) for the dashboard
+(`/` redirects there).
 
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a full walkthrough.
 
@@ -64,8 +65,19 @@ docker compose -f deploy/docker/docker-compose.yml up -d
 ```
 
 ### systemd (production)
+
+Generate the keypair on a **separate, offline machine** and copy only the public
+half to the host. The installer refuses to run if it finds a private key beside
+it — a recovery key readable by the daemon can be used to release containment by
+anything that compromises the daemon.
+
 ```bash
-sudo bash deploy/install.sh
+# On an offline machine:
+aegis-shield keygen admin.pem admin.pub
+scp admin.pub root@<host>:/etc/aegis-shield/admin.pub
+
+# On the protected host:
+sudo bash deploy/install.sh          # generates a stable API key in /etc/aegis-shield/env
 sudo systemctl enable --now aegis-shield
 ```
 
@@ -89,7 +101,10 @@ aegis-shield keygen <private.pem> <public.pem>
     Generate an Ed25519 admin keypair.
 
 aegis-shield issue-token <namespace-dir> <private.pem> --state-version <n>
-    Issue a signed recovery token.
+                         [--action enter_recovery_read_only|enter_maintenance]
+    Issue a signed authorization token. Redeem it over the Unix socket:
+      echo "authorize   <token>" | nc -U /run/aegis-shield/aegis.sock
+      echo "maintenance <token>" | nc -U /run/aegis-shield/aegis.sock
 
 aegis-shield generate-trace <output.jsonl> --pattern <name>
     Generate a synthetic I/O trace for testing.
@@ -131,17 +146,24 @@ pytest tests/ -v
 This software reference deployment is **not** a production-certified security product. Specifically:
 
 - **Enforcement is software-only**: a privileged process on the same host can bypass it. Hardware enforcement requires the FPGA PCIe interposer described in `Aegis-Block/docs/`.
-- **Detection coefficients are engineering estimates**: the policy thresholds and weights have not been validated against a production ransomware corpus.
+- **Detection coefficients are engineering estimates**: the policy thresholds and weights have not been validated against a production ransomware corpus. Containment is on by default, but no true-positive or false-positive rate has been measured.
 - **No TLS out of the box**: use a reverse proxy (nginx, Caddy) in production.
-- **Physical presence is a flag**: wire it to a real physical input in production deployments.
+- **Physical presence is local shell access**, asserted by reaching the daemon over its Unix socket. Wire it to a real physical input in production deployments.
+- **The Rust crates are specifications, not a runtime layer**: they compile and self-test, but the Python daemon does not call them. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **The NBD export is unauthenticated**: it binds to loopback unless you pass `--nbd-allow-remote`. Anyone who can reach the port has full read/write access.
 
 What it genuinely provides:
 - A faithful model of the hardware state machine that can be integrated, tested, and evaluated.
 - A forensically intact, hash-chained audit log that is fsync'd after every event.
 - A file-backed journal that supports point-in-time recovery snapshots.
-- A signed, short-lived, state-version-bound recovery token scheme.
+- A signed, short-lived, state-version-bound recovery token scheme with single-use nonces.
+- Containment that fails closed: if the persisted engine state is missing, unreadable, or does not match its digest in the audit chain, the engine enters `fault` with writes denied rather than booting into `normal`.
 
 ---
+
+## Third-party components
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

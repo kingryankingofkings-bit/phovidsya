@@ -15,8 +15,10 @@ class PolicyConfig:
 
     minimum_operations: int = 16
     alert_threshold: float = 0.65
+    # 0.82 is deliberately well above the ~0.65 that sustained random-entropy
+    # writes produce, so containment needs several corroborating signals.
     containment_threshold: float = 0.82
-    containment_enabled: bool = False
+    containment_enabled: bool = True
     weights: dict[str, float] = field(
         default_factory=lambda: {
             "entropy": 0.18,

@@ -10,6 +10,10 @@ User=aegis
 Group=aegis
 WorkingDirectory=/var/lib/aegis-shield
 
+# Stable API key, root-owned and group-readable by aegis. Without this the
+# daemon mints an ephemeral key on every restart, breaking all clients.
+EnvironmentFile=/etc/aegis-shield/env
+
 ExecStart=/usr/local/bin/aegis-shield start /var/lib/aegis-shield/namespace \
     --host 127.0.0.1 \
     --port 8443 \

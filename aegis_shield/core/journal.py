@@ -212,14 +212,45 @@ class DurableJournal:
             with (self.root / name).open("rb") as handle:
                 os.fsync(handle.fileno())
 
-    def snapshot(self, name: str) -> Path:
-        if not name or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for character in name):
-            raise ValueError("snapshot name may contain only letters, digits, dash, and underscore")
+    _NAME_ALPHABET = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    )
+
+    def snapshot(self, name: str, at_sequence: int | None = None) -> Path:
+        """Copy the namespace into ``snapshots/<name>``.
+
+        When *at_sequence* is given, the copied journal is truncated after that
+        sequence so the bundle contains exactly the history it claims to.  The
+        truncated log is re-verified by opening the snapshot, which fails loudly
+        if the copy is not a valid, self-consistent chain.
+        """
+        if not name or any(character not in self._NAME_ALPHABET for character in name):
+            raise ValueError(
+                "snapshot name may contain only letters, digits, dash, and underscore"
+            )
+        if at_sequence is not None and not 0 <= at_sequence <= self.last_sequence:
+            raise ValueError("invalid snapshot sequence")
         destination = self.root / "snapshots" / name
         destination.mkdir(parents=True, exist_ok=False)
-        for source_name in (self.METADATA, self.BASE, self.LOG):
+        for source_name in (self.METADATA, self.BASE):
             shutil.copy2(self.root / source_name, destination / source_name)
+
+        if at_sequence is None:
+            shutil.copy2(self.root / self.LOG, destination / self.LOG)
+        else:
+            kept: list[bytes] = []
+            with (self.root / self.LOG).open("rb") as handle:
+                for raw in handle:
+                    if not raw.strip():
+                        continue
+                    if int(json.loads(raw)["sequence"]) > at_sequence:
+                        break
+                    kept.append(raw if raw.endswith(b"\n") else raw + b"\n")
+            self._atomic_write(destination / self.LOG, b"".join(kept))
+
         self._fsync_directory(destination)
+        # Opening the copy replays and verifies its chain; a bad bundle raises.
+        DurableJournal(destination)
         return destination
 
     def compact(self, snapshot_name: str) -> None:

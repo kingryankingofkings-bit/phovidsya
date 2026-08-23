@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 
 from .entropy import changed_byte_fraction, shannon_entropy
@@ -36,7 +36,12 @@ class WindowAnalyzer:
             raise ValueError("window_operations and namespace_blocks must be positive")
         self.config = config
         self._window: deque[_Observation] = deque(maxlen=config.window_operations)
-        self._written_blocks: set[int] = set()
+        # Blocks written within the current window, with a reference count so
+        # entries retire as observations leave the deque.  An unbounded all-time
+        # set would grow without limit AND would saturate overwrite_fraction
+        # near 1.0 once the namespace had been touched, destroying the feature's
+        # ability to discriminate ransomware from ordinary traffic.
+        self._written_blocks: Counter[int] = Counter()
         self._recent_reads: deque[tuple[int, int]] = deque(maxlen=config.window_operations)
         self._last_write_end: int | None = None
 
@@ -52,7 +57,7 @@ class WindowAnalyzer:
         elif event.kind is IoKind.WRITE:
             entropy = shannon_entropy(event.payload)
             covered = range(event.lba, event.lba + event.blocks)
-            overwrite = any(block in self._written_blocks for block in covered)
+            overwrite = any(self._written_blocks[block] for block in covered)
             if before is not None:
                 change = changed_byte_fraction(before, event.payload)
             sequential = self._last_write_end == event.lba
@@ -60,10 +65,13 @@ class WindowAnalyzer:
                 event.lba < read_end and event.lba + event.blocks > read_start
                 for read_start, read_end in self._recent_reads
             )
-            self._written_blocks.update(covered)
             self._last_write_end = event.lba + event.blocks
 
         destructive = event.kind is IoKind.ADMIN or event.kind is IoKind.DEALLOCATE
+        # Retire the observation the bounded deque is about to evict, so the
+        # written-block census stays scoped to the window.
+        if len(self._window) == self._window.maxlen:
+            self._retire(self._window[0])
         self._window.append(
             _Observation(
                 kind=event.kind,
@@ -78,7 +86,21 @@ class WindowAnalyzer:
                 destructive=destructive,
             )
         )
+        if event.kind is IoKind.WRITE:
+            for block in range(event.lba, event.lba + event.blocks):
+                self._written_blocks[block] += 1
         return self.snapshot()
+
+    def _retire(self, observation: _Observation) -> None:
+        """Drop an observation's contribution to the written-block census."""
+        if observation.kind is not IoKind.WRITE:
+            return
+        for block in range(observation.lba, observation.lba + observation.blocks):
+            remaining = self._written_blocks.get(block, 0) - 1
+            if remaining > 0:
+                self._written_blocks[block] = remaining
+            else:
+                self._written_blocks.pop(block, None)
 
     def snapshot(self) -> FeatureVector:
         items = list(self._window)
