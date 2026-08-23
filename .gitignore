@@ -3,3 +3,5 @@ aegis_shield/**/__pycache__
 *.pyc
 *.egg-info/
 .pytest_cache/
+target/
+.coverage

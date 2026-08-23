@@ -134,20 +134,47 @@ function renderEvents(events) {
   const placeholder = tbody.querySelector('.placeholder-row');
   if (placeholder) placeholder.remove();
 
-  const rows = events.map((ev, i) => {
+  // Audit content is DATA, never markup. Anyone who can write the audit log --
+  // including an attacker who has compromised the host this dashboard is used to
+  // investigate -- would otherwise get script execution in the operator's browser
+  // and could read the API key out of sessionStorage. Build nodes, never HTML.
+  const frag = document.createDocumentFragment();
+  events.forEach((ev, i) => {
     const absIdx = state.allEvents.length - events.length + i + 1;
-    const tag = `<span class="event-tag tag-${ev.event || ''}">${ev.event || '?'}</span>`;
-    const ts = `<span class="event-ts">${fmtTs(ev.timestamp_ns)}</span>`;
+    const name = String(ev.event ?? '?');
     const detail = JSON.stringify(ev.details || {});
-    return `<tr>
-      <td class="event-idx">${absIdx}</td>
-      <td>${tag}</td>
-      <td>${ts}</td>
-      <td class="event-detail" title="${detail.replace(/"/g, '&quot;')}">${detail}</td>
-    </tr>`;
-  }).join('');
 
-  tbody.insertAdjacentHTML('afterbegin', rows);
+    const tr = document.createElement('tr');
+
+    const tdIdx = document.createElement('td');
+    tdIdx.className = 'event-idx';
+    tdIdx.textContent = absIdx;
+
+    const tdTag = document.createElement('td');
+    const tag = document.createElement('span');
+    // classList rejects malformed tokens, so an event name can never break out
+    // of the attribute; the readable name still goes in as text.
+    tag.className = 'event-tag';
+    if (/^[A-Za-z0-9_-]+$/.test(name)) tag.classList.add('tag-' + name);
+    tag.textContent = name;
+    tdTag.appendChild(tag);
+
+    const tdTs = document.createElement('td');
+    const ts = document.createElement('span');
+    ts.className = 'event-ts';
+    ts.textContent = fmtTs(ev.timestamp_ns);
+    tdTs.appendChild(ts);
+
+    const tdDetail = document.createElement('td');
+    tdDetail.className = 'event-detail';
+    tdDetail.title = detail;
+    tdDetail.textContent = detail;
+
+    tr.append(tdIdx, tdTag, tdTs, tdDetail);
+    frag.appendChild(tr);
+  });
+
+  tbody.insertBefore(frag, tbody.firstChild);
 
   while (tbody.rows.length > 2000) {
     tbody.deleteRow(tbody.rows.length - 1);

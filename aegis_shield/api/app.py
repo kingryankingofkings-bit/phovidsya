@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routers import events, recovery, status as status_router
@@ -32,6 +33,30 @@ def create_app(
 
     app.state.engine = engine
     app.state.public_key_path = public_key_path
+    app.state.challenges = {}
+
+    # The dashboard is self-contained (no CDNs, no inline event handlers), so a
+    # strict policy costs nothing and gives defence in depth behind the DOM-based
+    # rendering in dashboard.js.
+    _CSP = (
+        "default-src 'none'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'none'; "
+        "frame-ancestors 'none'"
+    )
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
 
     app.include_router(status_router.router, prefix="/v1", tags=["status"])
     app.include_router(events.router, prefix="/v1", tags=["events"])
@@ -46,5 +71,10 @@ def create_app(
 
     if WEB_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="dashboard")
+
+        @app.get("/", include_in_schema=False)
+        async def dashboard_root() -> RedirectResponse:
+            """Send the bare host to the dashboard rather than a bare 404."""
+            return RedirectResponse(url="/ui/")
 
     return app

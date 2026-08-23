@@ -178,14 +178,16 @@ class AegisDaemon:
             return json.dumps({"error": str(exc)})
 
     def _socket_compact(self, engine: AegisEngine) -> str:
-        """Compact the journal on demand, outside a maintenance window."""
-        import time as _t
+        """Compact the journal on demand.
+
+        Delegates to :meth:`AegisEngine.compact_journal`, which refuses to run
+        outside NORMAL/MAINTENANCE.  Compacting a contained or recovering device
+        would destroy the live forensic journal and strand its sequence anchors.
+        """
         try:
-            snapshot_name = f"compact-{int(_t.time())}"
-            engine.journal.compact(snapshot_name)
-            engine.audit.append("journal_compacted", {"snapshot_name": snapshot_name})
+            snapshot_name = engine.compact_journal()
             return json.dumps({"compacted": True, "snapshot_name": snapshot_name})
-        except Exception as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             return json.dumps({"compacted": False, "error": str(exc)})
 
     # ── NBD server ───────────────────────────────────────────────────────────────────

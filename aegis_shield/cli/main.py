@@ -61,7 +61,17 @@ def provision(namespace_dir: Path, blocks: int, block_size: int, device_id: Opti
     "--nbd-host",
     default=None,
     envvar="AEGIS_NBD_HOST",
-    help="Host to bind the NBD write-gate (omit to disable NBD)",
+    help="Host to bind the NBD write-gate (omit to disable NBD). NBD is "
+    "UNAUTHENTICATED: anyone who can reach the port gets full read/write "
+    "access to the namespace. Non-loopback binds need --nbd-allow-remote.",
+)
+@click.option(
+    "--nbd-allow-remote",
+    is_flag=True,
+    default=False,
+    envvar="AEGIS_NBD_ALLOW_REMOTE",
+    help="Permit binding NBD to a non-loopback address. Required because the "
+    "NBD export has no authentication and no TLS.",
 )
 @click.option(
     "--nbd-port",
@@ -86,6 +96,7 @@ def start(
     policy_config: Optional[Path],
     blocks: int,
     nbd_host: Optional[str],
+    nbd_allow_remote: bool,
     nbd_port: int,
     nbd_export: str,
 ) -> None:
@@ -101,6 +112,29 @@ def start(
 
     audit_path = namespace_dir / "audit.jsonl"
     policy_cfg = load_policy(policy_config) if policy_config else PolicyConfig()
+
+    if nbd_host is not None and nbd_host not in ("127.0.0.1", "::1", "localhost"):
+        if not nbd_allow_remote:
+            click.echo(
+                f"[error] Refusing to bind the unauthenticated NBD export to {nbd_host!r}.\n"
+                "        NBD has no authentication and no TLS: anyone who can reach the\n"
+                "        port gets full read/write access to the protected namespace.\n"
+                "        Use --nbd-host 127.0.0.1, or pass --nbd-allow-remote if the\n"
+                "        port is genuinely restricted by other means.",
+                err=True,
+            )
+            sys.exit(1)
+        click.echo(
+            f"[warning] NBD is bound to {nbd_host!r} with no authentication or TLS.",
+            err=True,
+        )
+
+    if not policy_cfg.containment_enabled:
+        click.echo(
+            "[warning] Containment is DISABLED in this policy. The daemon will "
+            "detect and alert but will not freeze the namespace.",
+            err=True,
+        )
 
     daemon = AegisDaemon(
         namespace_dir=namespace_dir,
@@ -127,15 +161,43 @@ def start(
 @cli.command()
 @click.argument("namespace_dir", type=click.Path(exists=True, path_type=Path))
 def status(namespace_dir: Path) -> None:
-    """Show the current engine status for a provisioned namespace."""
+    """Show the current engine status for a provisioned namespace.
+
+    Read-only: this reads the persisted state directly rather than constructing
+    an engine, because constructing one appends audit events and can advance
+    state_version — which would invalidate already-issued recovery tokens and
+    dilute the forensic record every time an operator checks status.
+    """
     from ..core.journal import DurableJournal
-    from ..core.engine import AegisEngine
-    from ..core.policy import Policy, PolicyConfig
+    from ..core.types import AegisState
 
     journal = DurableJournal(namespace_dir)
-    engine = AegisEngine(journal, Policy(PolicyConfig()), namespace_dir / "audit.jsonl")
-    info = engine.status()
-    click.echo(json.dumps(info, indent=2))
+    state_path = namespace_dir / "engine_state.json"
+    if state_path.exists():
+        persisted = json.loads(state_path.read_bytes())
+        state = str(persisted.get("state", "unknown"))
+        state_version = int(persisted.get("state_version", 0))
+        containment_sequence = persisted.get("containment_sequence")
+        recovery_sequence = persisted.get("recovery_sequence")
+    else:
+        state, state_version = "not_started", 0
+        containment_sequence = recovery_sequence = None
+
+    writable = {AegisState.NORMAL.value, AegisState.ELEVATED.value}
+    click.echo(
+        json.dumps(
+            {
+                "device_id": journal.device_id,
+                "state": state,
+                "state_version": state_version,
+                "last_sequence": journal.last_sequence,
+                "containment_sequence": containment_sequence,
+                "recovery_sequence": recovery_sequence,
+                "writes_allowed": state in writable,
+            },
+            indent=2,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,14 +227,30 @@ def keygen(private: Path, public: Path) -> None:
 @click.option("--state-version", required=True, type=int)
 @click.option("--target-sequence", default=None, type=int)
 @click.option("--ttl-seconds", default=600, show_default=True, type=int, help="Token TTL (max 900)")
+@click.option(
+    "--action",
+    default="enter_recovery_read_only",
+    show_default=True,
+    type=click.Choice(["enter_recovery_read_only", "enter_maintenance"]),
+    help="Action the token authorizes. Use enter_maintenance to re-enable "
+    "writes for servicing; enter_recovery_read_only for forensic reads.",
+)
 def issue_token(
     namespace_dir: Path,
     private_key: Path,
     state_version: int,
     target_sequence: Optional[int],
     ttl_seconds: int,
+    action: str,
 ) -> None:
-    """Issue a short-lived signed recovery authorization token."""
+    """Issue a short-lived signed authorization token.
+
+    Redeem it locally — physical presence is asserted by reaching the daemon
+    over its Unix socket, never over HTTP:
+
+        echo "authorize   <token>" | nc -U /run/aegis-shield/aegis.sock
+        echo "maintenance <token>" | nc -U /run/aegis-shield/aegis.sock
+    """
     import time
     from dataclasses import asdict
     from ..core.journal import DurableJournal
@@ -185,14 +263,22 @@ def issue_token(
 
     journal = DurableJournal(namespace_dir)
     now = int(time.time())
+    # A maintenance token authorizes a state change, not a point-in-time read,
+    # so it carries no target sequence.
+    if action == "enter_maintenance":
+        sequence = None
+    elif target_sequence is not None:
+        sequence = target_sequence
+    else:
+        sequence = journal.last_sequence
     authorization = RecoveryAuthorization(
-        action="enter_recovery_read_only",
+        action=action,
         device_id=journal.device_id,
         expires_unix=now + ttl_seconds,
         issued_unix=now,
         nonce=secrets.token_hex(16),
         state_version=state_version,
-        target_sequence=target_sequence if target_sequence is not None else journal.last_sequence,
+        target_sequence=sequence,
     )
     token = sign_authorization(authorization, private_key.read_bytes())
     click.echo(token)

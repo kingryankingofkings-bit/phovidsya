@@ -52,11 +52,33 @@ aegis-shield replay ./test-ns ./trace.jsonl
 If the engine is in CONTAINED state:
 
 ```bash
-aegis-shield issue-token ./my-namespace admin_private.pem \
-    --state-version 3 --target-sequence 42
+TOKEN=$(aegis-shield issue-token ./my-namespace admin_private.pem \
+    --state-version 3 --target-sequence 42)
 ```
 
-Submit the token via `POST /v1/authorize` with `physical_presence: true`.
+Redeem it over the Unix socket — physical presence means local access, so this
+cannot be done over HTTP:
+
+```bash
+echo "authorize $TOKEN" | nc -U /run/aegis-shield/aegis.sock
+```
+
+`POST /v1/authorize` will only tell you whether a token is *valid*; it never
+changes state.
+
+## 8. Servicing a contained device
+
+To re-enable writes for maintenance:
+
+```bash
+TOKEN=$(aegis-shield issue-token ./my-namespace admin_private.pem \
+    --state-version <current> --action enter_maintenance)
+echo "maintenance $TOKEN"        | nc -U /run/aegis-shield/aegis.sock
+echo "exit-maintenance compact"  | nc -U /run/aegis-shield/aegis.sock
+```
+
+`--state-version` must match the engine's current value — read it from
+`aegis-shield status ./my-namespace`.
 
 ## Next steps
 

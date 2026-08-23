@@ -25,11 +25,3 @@ def changed_byte_fraction(before: bytes, after: bytes) -> float:
     if not before:
         return 0.0
     return sum(a != b for a, b in zip(before, after, strict=True)) / len(before)
-
-
-def collision_concentration(data: bytes) -> int:
-    """Exact sum(count(byte)^2), matching the streaming RTL proxy metric."""
-    counts = [0] * 256
-    for byte in data:
-        counts[byte] += 1
-    return sum(count * count for count in counts)

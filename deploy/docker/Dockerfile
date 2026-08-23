@@ -1,16 +1,16 @@
 # ── Stage 1: Rust build ─────────────────────────────────────────────────────
-FROM rust:1.79-slim AS rust-builder
+FROM rust:1.89-slim AS rust-builder
 
 WORKDIR /build
 
 COPY rust-toolchain.toml ./
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY kernel/ ./kernel/
 
-# Build and test all Rust crates (no_std contracts + guardian monitor)
-RUN cargo test --workspace --offline 2>/dev/null || \
-    cargo test --workspace
+# Build and test all Rust crates (no_std contracts + guardian monitor).
+# No error masking: a failing contract test must fail the image build.
+RUN cargo test --workspace --locked
 
 # ── Stage 2: Python runtime ──────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -32,15 +32,12 @@ RUN mkdir -p /var/lib/aegis-shield /etc/aegis-shield /run/aegis-shield \
 WORKDIR /app
 
 # Install Python package
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 COPY aegis_shield/ ./aegis_shield/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # Web dashboard
 COPY web/ ./web/
-
-# Copy Rust validation artifacts (proves contracts compiled cleanly)
-COPY --from=rust-builder /build/target/debug/.fingerprint/ /app/rust-fingerprint/
 
 EXPOSE 8443
 

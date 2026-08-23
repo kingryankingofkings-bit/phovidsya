@@ -32,8 +32,39 @@ See [QUICKSTART.md](QUICKSTART.md).
 
 | Concern | Recommendation |
 |---|---|
-| API key | Use `secrets.token_hex(32)`. Rotate periodically. |
-| Admin private key | Generate offline, never deploy to the protected host. |
-| TLS | Put a reverse proxy (nginx, Caddy) in front of port 8443. |
-| Physical presence | Wire to a physical button or tamper-evident hardware signal. |
-| Namespace backup | Periodically call `POST /v1/recovery/export`. |
+| API key | `deploy/install.sh` writes one to `/etc/aegis-shield/env` (mode 0640, root-owned). Rotate periodically. |
+| Admin private key | Generate offline. The installer **refuses to run** if it finds one in `/etc/aegis-shield`. Anything that can read it can release containment. |
+| TLS | Put a reverse proxy (nginx, Caddy) in front of port 8443. Docker binds to loopback for this reason. |
+| Physical presence | Currently local Unix-socket access. Wire to a physical button or tamper-evident signal for production. |
+| NBD export | Unauthenticated. Loopback-only unless `--nbd-allow-remote` is passed. |
+| Namespace backup | Periodically call `POST /v1/recovery/export`. Snapshots are capped at 32; prune old ones. |
+| Containment | On by default. Startup warns if a policy file disables it. |
+
+## Recovering from FAULT
+
+The engine enters `fault` — reads allowed, writes denied — when its persisted
+state cannot be trusted (file missing, corrupt, or not matching its digest in
+the audit chain). This is deliberate: the alternative is silently releasing
+containment.
+
+Investigate first. `journalctl -u aegis-shield` will name the reason, and the
+audit log records a `fault_entered` event. Once you have established the cause,
+return the device to service with a maintenance token:
+
+```bash
+TOKEN=$(aegis-shield issue-token /var/lib/aegis-shield/namespace admin.pem \
+    --state-version <current> --action enter_maintenance)
+echo "maintenance $TOKEN" | nc -U /run/aegis-shield/aegis.sock
+echo "exit-maintenance"   | nc -U /run/aegis-shield/aegis.sock
+```
+
+## Uninstall
+
+```bash
+sudo systemctl disable --now aegis-shield
+sudo rm /etc/systemd/system/aegis-shield.service && sudo systemctl daemon-reload
+sudo pip3 uninstall aegis-shield
+# Namespace and keys are left in place deliberately — they hold your data and
+# your recovery material. Remove them only when you are certain:
+#   sudo rm -rf /var/lib/aegis-shield /etc/aegis-shield
+```
