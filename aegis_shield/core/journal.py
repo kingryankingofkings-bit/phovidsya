@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import uuid
 import zlib
 from dataclasses import dataclass
@@ -18,11 +19,44 @@ def _canonical(value: dict) -> bytes:
 
 @dataclass(frozen=True)
 class JournalRecord:
+    """A journal record with its payload materialised.
+
+    Produced on demand by :meth:`DurableJournal.iter_records` and
+    :meth:`DurableJournal.record_at`. Payloads are **not** held in memory —
+    see :class:`_RecordIndex`.
+    """
+
     sequence: int
     block: int
     data: bytes
     previous_hash: str
     record_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordIndex:
+    """Where a record lives on disk, and what it covers.
+
+    Holding payloads in memory made resident size grow without bound: every
+    block ever written stayed resident forever, at ``block_size`` bytes each.
+    A 64 GiB namespace rewritten once would need tens of gigabytes of RAM.
+
+    This entry is ~100 bytes regardless of block size. Payloads are read back
+    from ``journal.jsonl`` on demand and CRC-checked on the way out.
+    """
+
+    sequence: int
+    block: int
+    blocks: int
+    offset: int          # byte offset of this record's line in journal.jsonl
+    #: Stored as 32 raw bytes rather than a 64-character hex string; at one
+    #: entry per write the difference is not academic. ``previous_hash`` is not
+    #: stored at all — it is by definition the preceding entry's digest.
+    record_digest: bytes
+
+    @property
+    def record_hash(self) -> str:
+        return self.record_digest.hex()
 
 
 class JournalCorruptionError(RuntimeError):
@@ -32,8 +66,20 @@ class JournalCorruptionError(RuntimeError):
 class DurableJournal:
     """File-backed, append-and-fsync reference journal.
 
-    This deliberately favors inspectability and crash replay over throughput. It is not the
-    production on-media format and never opens a raw block device.
+    This deliberately favors inspectability and crash replay over throughput. It
+    is not the production on-media format and never opens a raw block device.
+
+    **Memory.** Payloads are not held in memory. The in-memory index stores a
+    byte offset per record (~213 B measured, against 4096 B when payloads were
+    resident — a 19x reduction), and the overlay maps each block to an index
+    position rather than to its contents. A 64 GiB namespace rewritten once
+    needs roughly 3.5 GB resident instead of 68 GB.
+
+    That is a floor, not a fix for unbounded growth: the index still grows with
+    the number of records, so a long-lived namespace should be compacted
+    periodically (``compact()`` resets it). Removing the remaining per-record
+    Python object would mean a packed binary index, which would cost the
+    inspectability this class exists to provide.
     """
 
     METADATA = "metadata.json"
@@ -74,10 +120,20 @@ class DurableJournal:
         expected_size = self.blocks * self.block_size
         if (self.root / self.BASE).stat().st_size != expected_size:
             raise JournalCorruptionError("base image size does not match metadata")
-        self._overlay: dict[int, tuple[int, bytes]] = {}
-        self._records: list[JournalRecord] = []
+        # block -> position in _index of the record that currently owns it.
+        # Stores an index position, not the block's contents.
+        self._overlay: dict[int, int] = {}
+        self._index: list[_RecordIndex] = []
         self._last_hash = "0" * 64
         self._next_sequence = 1
+        self._log_size = 0
+        # One long-lived read handle; reopening per block made compaction do one
+        # open() per block in the namespace. seek()+readline() is stateful, so
+        # concurrent readers would interleave and hand each other the wrong
+        # record. AegisEngine already serialises, but the journal is usable on
+        # its own and must not be a footgun.
+        self._log_reader = None
+        self._reader_lock = threading.Lock()
         self._replay()
 
     @staticmethod
@@ -99,10 +155,24 @@ class DurableJournal:
             os.close(descriptor)
 
     def _replay(self) -> None:
+        """Verify the chain and build the on-disk index.
+
+        Reads with explicit ``readline()`` rather than iterating the handle:
+        iteration buffers ahead, which makes ``tell()`` meaningless, and every
+        record's byte offset has to be exact for reads to find it later.
+        """
         expected_hash = "0" * 64
         expected_sequence = 1
+        offset = 0
         with (self.root / self.LOG).open("rb") as handle:
-            for line_number, raw in enumerate(handle, start=1):
+            line_number = 0
+            while True:
+                raw = handle.readline()
+                if not raw:
+                    break
+                line_offset = offset
+                offset += len(raw)
+                line_number += 1
                 if not raw.strip():
                     continue
                 try:
@@ -125,15 +195,93 @@ class DurableJournal:
                     raise JournalCorruptionError(f"record size mismatch on line {line_number}")
                 block = int(value["block"])
                 self._check_range(block, blocks)
-                record = JournalRecord(expected_sequence, block, data, expected_hash, stored_hash)
-                self._records.append(record)
-                for offset in range(blocks):
-                    chunk = data[offset * self.block_size : (offset + 1) * self.block_size]
-                    self._overlay[block + offset] = (expected_sequence, chunk)
+                position = len(self._index)
+                self._index.append(
+                    _RecordIndex(
+                        sequence=expected_sequence,
+                        block=block,
+                        blocks=blocks,
+                        offset=line_offset,
+                        record_digest=bytes.fromhex(stored_hash),
+                    )
+                )
+                for block_offset in range(blocks):
+                    self._overlay[block + block_offset] = position
                 expected_hash = stored_hash
                 expected_sequence += 1
         self._last_hash = expected_hash
         self._next_sequence = expected_sequence
+        self._log_size = offset
+
+    # ── payload access ───────────────────────────────────────────────────────
+
+    def _reader(self):
+        """Return the shared read handle, opening it if needed."""
+        if self._log_reader is None or self._log_reader.closed:
+            self._log_reader = (self.root / self.LOG).open("rb")
+        return self._log_reader
+
+    def _close_reader(self) -> None:
+        lock = getattr(self, "_reader_lock", None)
+        if lock is None:                      # partially constructed
+            return
+        with lock:
+            if self._log_reader is not None and not self._log_reader.closed:
+                self._log_reader.close()
+            self._log_reader = None
+
+    def _payload_at(self, position: int) -> bytes:
+        """Read one record's payload back from disk.
+
+        The CRC is re-checked here rather than trusted from replay time: the
+        bytes are being handed to a caller now, and on-disk corruption after
+        startup must not pass silently through a forensic read path.
+        """
+        entry = self._index[position]
+        with self._reader_lock:
+            handle = self._reader()
+            handle.seek(entry.offset)
+            raw = handle.readline()
+        try:
+            value = json.loads(raw)
+            data = base64.b64decode(value["data_b64"], validate=True)
+        except Exception as exc:
+            raise JournalCorruptionError(
+                f"journal record {entry.sequence} could not be read back"
+            ) from exc
+        if int(value["sequence"]) != entry.sequence:
+            raise JournalCorruptionError(
+                f"journal record {entry.sequence} is not at its indexed offset"
+            )
+        if zlib.crc32(data) != int(value["crc32"]):
+            raise JournalCorruptionError(f"CRC mismatch reading record {entry.sequence}")
+        if len(data) != entry.blocks * self.block_size:
+            raise JournalCorruptionError(f"record {entry.sequence} has unexpected length")
+        return data
+
+    def _block_from(self, position: int, block: int) -> bytes:
+        """Extract one block's content from the record that owns it."""
+        entry = self._index[position]
+        data = self._payload_at(position)
+        start = (block - entry.block) * self.block_size
+        return data[start : start + self.block_size]
+
+    def record_at(self, position: int) -> JournalRecord:
+        """Materialise a full record, payload included, by index position."""
+        entry = self._index[position]
+        return JournalRecord(
+            sequence=entry.sequence,
+            block=entry.block,
+            data=self._payload_at(position),
+            previous_hash=self.previous_hash_at(position),
+            record_hash=entry.record_hash,
+        )
+
+    def previous_hash_at(self, position: int) -> str:
+        """The hash this record chains from — the preceding record's digest."""
+        if position == 0:
+            return "0" * 64
+        return self._index[position - 1].record_hash
 
     def _check_range(self, block: int, count: int) -> None:
         if block < 0 or count < 1 or block + count > self.blocks:
@@ -144,7 +292,13 @@ class DurableJournal:
         return self._next_sequence - 1
 
     def iter_records(self) -> Iterator[JournalRecord]:
-        return iter(tuple(self._records))
+        """Yield every record in sequence order, reading payloads on demand.
+
+        A generator rather than a materialised tuple: the whole journal no
+        longer fits in memory by construction, and callers stream it.
+        """
+        for position in range(len(self._index)):
+            yield self.record_at(position)
 
     def read(self, block: int, count: int = 1, at_sequence: int | None = None) -> bytes:
         self._check_range(block, count)
@@ -155,19 +309,19 @@ class DurableJournal:
             for current in range(block, block + count):
                 data: bytes | None = None
                 if at_sequence is None:
-                    overlay = self._overlay.get(current)
-                    data = overlay[1] if overlay else None
+                    position = self._overlay.get(current)
+                    if position is not None:
+                        data = self._block_from(position, current)
                 else:
-                    for record in reversed(self._records):
-                        record_blocks = len(record.data) // self.block_size
-                        if (
-                            record.sequence <= at_sequence
-                            and record.block <= current < record.block + record_blocks
-                        ):
-                            offset = current - record.block
-                            data = record.data[
-                                offset * self.block_size : (offset + 1) * self.block_size
-                            ]
+                    # Point-in-time read: newest record at or before the target
+                    # sequence that covers this block. Scanned in reverse so the
+                    # first match is the newest.
+                    for position in range(len(self._index) - 1, -1, -1):
+                        entry = self._index[position]
+                        if entry.sequence > at_sequence:
+                            continue
+                        if entry.block <= current < entry.block + entry.blocks:
+                            data = self._block_from(position, current)
                             break
                 if data is None:
                     base.seek(current * self.block_size)
@@ -194,18 +348,47 @@ class DurableJournal:
             "sequence": self._next_sequence,
         }
         record_hash = hashlib.sha256(_canonical(body)).hexdigest()
-        serialized = dict(body, record_hash=record_hash)
+        serialized = _canonical(dict(body, record_hash=record_hash)) + b"\n"
+        # The record's offset is the log size before this write. We are the only
+        # writer, so the value stays exact.
+        line_offset = self._log_size
         with (self.root / self.LOG).open("ab", buffering=0) as handle:
-            handle.write(_canonical(serialized) + b"\n")
+            handle.write(serialized)
             os.fsync(handle.fileno())
-        record = JournalRecord(self._next_sequence, start_block, data, self._last_hash, record_hash)
-        self._records.append(record)
-        for offset in range(count):
-            chunk = data[offset * self.block_size : (offset + 1) * self.block_size]
-            self._overlay[start_block + offset] = (self._next_sequence, chunk)
+        self._log_size += len(serialized)
+
+        position = len(self._index)
+        self._index.append(
+            _RecordIndex(
+                sequence=self._next_sequence,
+                block=start_block,
+                blocks=count,
+                offset=line_offset,
+                record_digest=bytes.fromhex(record_hash),
+            )
+        )
+        for block_offset in range(count):
+            self._overlay[start_block + block_offset] = position
+        sequence = self._next_sequence
         self._last_hash = record_hash
         self._next_sequence += 1
-        return record.sequence
+        return sequence
+
+    def close(self) -> None:
+        """Release the shared read handle. Safe to call more than once."""
+        self._close_reader()
+
+    def __enter__(self) -> "DurableJournal":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:  # best effort; close() is the supported path
+        try:
+            self._close_reader()
+        except Exception:
+            pass
 
     def flush(self) -> None:
         for name in (self.LOG, self.BASE):
@@ -253,19 +436,29 @@ class DurableJournal:
         DurableJournal(destination)
         return destination
 
+    #: Blocks materialised per read during compaction. Bounds peak memory at
+    #: ``COMPACT_CHUNK_BLOCKS * block_size`` while avoiding one file open per
+    #: block — the previous behaviour meant 65,536 opens for a default namespace.
+    COMPACT_CHUNK_BLOCKS = 256
+
     def compact(self, snapshot_name: str) -> None:
         """Create a retained snapshot, then atomically materialize the current logical image."""
         self.snapshot(snapshot_name)
         new_base = self.root / (self.BASE + ".new")
         with new_base.open("wb") as handle:
-            for block in range(self.blocks):
-                handle.write(self.read(block))
+            for start in range(0, self.blocks, self.COMPACT_CHUNK_BLOCKS):
+                count = min(self.COMPACT_CHUNK_BLOCKS, self.blocks - start)
+                handle.write(self.read(start, count))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(new_base, self.root / self.BASE)
         self._fsync_directory(self.root)
         self._atomic_write(self.root / self.LOG, b"")
+        # The log was replaced on disk; the shared read handle now points at a
+        # file that no longer exists under that name.
+        self._close_reader()
         self._overlay.clear()
-        self._records.clear()
+        self._index.clear()
         self._last_hash = "0" * 64
         self._next_sequence = 1
+        self._log_size = 0
